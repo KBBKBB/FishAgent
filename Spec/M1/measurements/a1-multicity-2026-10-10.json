@@ -1,0 +1,97 @@
+[
+  {
+    "task": "A1",
+    "date": "2026-10-10",
+    "city": "上海",
+    "tier": "一线",
+    "ground_truth_status": "draft-unverified",
+    "coverage_km": 100.0,
+    "spacing_factor": 1.414,
+    "max_pages": 4,
+    "tiles": 13,
+    "ground_truth_n": 10,
+    "recalled_n": 657,
+    "matched_n": 4,
+    "matched": [
+      "黄浦江",
+      "滴水湖",
+      "苏州河",
+      "淀山湖"
+    ],
+    "missed": [
+      "共青森林公园",
+      "夏阳湖",
+      "大莲湖",
+      "川杨河",
+      "淀浦河",
+      "蕰藻浜"
+    ],
+    "recall_rate": 0.4,
+    "threshold": 0.7,
+    "pass": false
+  },
+  {
+    "task": "A1",
+    "date": "2026-10-10",
+    "city": "成都",
+    "tier": "二线",
+    "ground_truth_status": "draft-unverified",
+    "coverage_km": 100.0,
+    "spacing_factor": 1.414,
+    "max_pages": 4,
+    "tiles": 13,
+    "ground_truth_n": 12,
+    "recalled_n": 540,
+    "matched_n": 8,
+    "matched": [
+      "石象湖",
+      "宝狮湖",
+      "紫坪铺水库",
+      "东风水库",
+      "清水河",
+      "沱江",
+      "三岔湖",
+      "金马河"
+    ],
+    "missed": [
+      "府河",
+      "毗河",
+      "白塔湖",
+      "龙泉湖"
+    ],
+    "recall_rate": 0.6667,
+    "threshold": 0.7,
+    "pass": false
+  },
+  {
+    "task": "A1",
+    "date": "2026-10-10",
+    "city": "雅安",
+    "tier": "三四线",
+    "ground_truth_status": "draft-unverified",
+    "coverage_km": 100.0,
+    "spacing_factor": 1.414,
+    "max_pages": 4,
+    "tiles": 13,
+    "ground_truth_n": 10,
+    "recalled_n": 351,
+    "matched_n": 5,
+    "matched": [
+      "荥经河",
+      "周公河",
+      "青衣江",
+      "汉源湖",
+      "名山河"
+    ],
+    "missed": [
+      "天全河",
+      "宝兴河",
+      "瀑布沟水库",
+      "芦山河",
+      "飞仙关水库"
+    ],
+    "recall_rate": 0.5,
+    "threshold": 0.7,
+    "pass": false
+  }
+]

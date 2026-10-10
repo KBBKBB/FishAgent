@@ -28,7 +28,7 @@ from fishagent_m1.amap import AmapClient, amap_error, is_amap_ok
 from fishagent_m1.config import Config
 from fishagent_m1.coord import wgs84_to_gcj02
 from fishagent_m1.mock import MockAmapClient
-from fishagent_m1.poi import measure_recall, recall_dual
+from fishagent_m1.poi import measure_recall
 from fishagent_m1.route import filter_within_2h, measure_round_trip_batch
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "Spec" / "M1" / "measurements"
@@ -142,11 +142,30 @@ def _a4_verdict(checks: dict) -> str:
 
 # ---------------------------------------------------------------- A1
 
-def a1(client, truth_path: str) -> dict:
+def a1(
+    client,
+    truth_path: str,
+    *,
+    coverage_km: float = 150.0,
+    spacing_factor: float = 1.414,
+    max_pages: int = 4,
+) -> dict:
+    """A1 召回率 —— 按【生产召回策略】实测：网格分片（突破 50km 上限）+ 关键词双路 + 去重。
+
+    ⚠️ 早期版本仅用「城市中心 50km 单圆 + 翻页上限」，会低估召回率（半径与翻页双重截断）。
+    """
+    from fishagent_m1.config import WATER_KEYWORDS
+    from fishagent_m1.poi import dedup_by_id, recall_around, recall_text
+
     truth = json.loads(Path(truth_path).read_text(encoding="utf-8"))
     lat, lng = truth["center_wgs84"]
-    user = _user_gcj(lat, lng)
-    pois = recall_dual(client, user, 50000, city=truth.get("city"))
+    plan = sharding.plan_grid(lat, lng, coverage_km * 1000, spacing_factor=spacing_factor)
+    collected = []
+    for tile in plan.tiles:
+        collected.extend(recall_around(client, tile.location, tile.radius, max_pages=max_pages))
+    for kw in WATER_KEYWORDS:
+        collected.extend(recall_text(client, kw, city=truth.get("city"), max_pages=max_pages))
+    pois = dedup_by_id(collected)
     res = measure_recall(set(truth["names"]), pois)
     rate = round(res.recall_rate, 4)
     return {
@@ -154,6 +173,11 @@ def a1(client, truth_path: str) -> dict:
         "date": TODAY,
         "city": truth.get("city"),
         "tier": truth.get("tier"),
+        "ground_truth_status": truth.get("status", "unknown"),
+        "coverage_km": coverage_km,
+        "spacing_factor": spacing_factor,
+        "max_pages": max_pages,
+        "tiles": len(plan.tiles),
         "ground_truth_n": len(res.ground_truth),
         "recalled_n": len(pois),
         "matched_n": len(res.matched),
@@ -359,7 +383,10 @@ def main() -> int:
         if not args.truth:
             print("A1 需要 --truth <真值集 JSON>（模板见 fixtures/ground_truth.example.json）", file=sys.stderr)
             return 2
-        results["a1"] = a1(client, args.truth)
+        results["a1"] = a1(
+            client, args.truth, coverage_km=args.coverage_km,
+            spacing_factor=args.spacing_factor, max_pages=args.max_pages,
+        )
     if args.task in ("a2", "all"):
         if not args.cities:
             print("A2 需要 --cities <城市测试点 JSON>（模板见 fixtures/cities.example.json）", file=sys.stderr)

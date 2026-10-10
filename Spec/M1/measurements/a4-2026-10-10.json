@@ -1,0 +1,31 @@
+{
+  "task": "A4",
+  "date": "2026-10-10",
+  "city": "成都",
+  "checks": {
+    "recalled_pois": 222,
+    "entr_location_missing_rate": 0.509,
+    "v3_distance_type0_straight": {
+      "ok": true,
+      "duration_s": 0.0,
+      "distance_m": 994.0
+    },
+    "v3_distance_type1_driving": {
+      "ok": true,
+      "duration_s": 951.0,
+      "distance_m": 2494.0
+    },
+    "v5_driving": {
+      "ok": true,
+      "duration_s": 998.0,
+      "has_traffic_fields": false
+    },
+    "check1_v3_distance_open": true,
+    "check2_returns_duration": true,
+    "check3_realtime_traffic": "一致：v3 type=1=951s 与 v5=998s 相差 5%（均为路网时长）",
+    "check4_entr_missing_rate": 0.509,
+    "check4_entr_missing_rate_ok": false,
+    "endpoint_used": "104.058786,30.65772",
+    "A4_verdict": "PASS（v3/distance type=1 可用且返回 duration；type=0 为直线距离无 duration）"
+  }
+}

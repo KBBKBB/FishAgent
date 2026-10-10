@@ -1,0 +1,52 @@
+{
+  "task": "A2",
+  "date": "2026-10-10",
+  "coverage_km": 80.0,
+  "spacing_factor": 1.414,
+  "max_pages": 1,
+  "max_candidates": 40,
+  "cities": [
+    {
+      "city": "上海",
+      "tier": "一线",
+      "per_point_counts": [
+        40,
+        40,
+        40,
+        40,
+        40
+      ],
+      "median": 40,
+      "threshold": 5,
+      "pass": true
+    },
+    {
+      "city": "成都",
+      "tier": "二线",
+      "per_point_counts": [
+        40,
+        40,
+        40,
+        40,
+        40
+      ],
+      "median": 40,
+      "threshold": 4,
+      "pass": true
+    },
+    {
+      "city": "雅安",
+      "tier": "三四线",
+      "per_point_counts": [
+        38,
+        40,
+        37,
+        37,
+        37
+      ],
+      "median": 37,
+      "threshold": 3,
+      "pass": true
+    }
+  ]
+}

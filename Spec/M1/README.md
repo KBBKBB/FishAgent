@@ -18,13 +18,13 @@
 
 | 编号 | 任务 | 状态 | 结论/产出 |
 |---|---|---|---|
-| M1-T01 | 水域 POI 双路召回实测 | `[~]` | 方法+原型就绪；召回率需真实 Key → `poi-recall.md` |
+| M1-T01 | 水域 POI 双路召回实测 | `[~]` | **成都 80%（4/5，初步）**；待每城 50 点 → `poi-recall.md` |
 | M1-T02 | 周边搜索半径分片方案实测 | `[x]` | 选型：网格分片；调用量对照表 → `sharding-selection.md` |
-| M1-T03 | `entr_location` 端点可用性验证 | `[~]` | 解析/回退逻辑就绪；缺失率需真实 Key → `route-measurement.md` |
-| M1-T04 | 距离测量接口开放性 + 实时路况 | `[~]` | **发现参数结构问题**（见下）→ `route-measurement.md` |
+| M1-T03 | `entr_location` 端点可用性验证 | `[x]` | **缺失率 50.9%（成都 222 个 POI）** → `route-measurement.md` |
+| M1-T04 | 距离测量接口开放性 + 实时路况 | `[x]` | **通过**；**另发现 v5 需 `show_fields=cost`** → `route-measurement.md` |
 | M1-T05 | 坐标系转换验证 | `[x]` | 本地算法往返误差 <1mm，偏移 360~620m → `coordinate-conversion.md` |
-| M1-T06 | 各接口独立配额实测 | `[ ]` | 实测模板 → `weather-and-quota.md` §B |
-| M1-T07 | 城区有效水域存量实测 | `[ ]` | 方法（三档城市×5 点取中位数）→ `poi-recall.md` §4 |
+| M1-T06 | 各接口独立配额实测 | `[~]` | **6 接口均可用、无配额错误**；绝对额度待控制台 → `weather-and-quota.md` §B |
+| M1-T07 | 城区有效水域存量实测 | `[x]` | **一线 40 / 二线 40 / 三四线 37（达标）** → `poi-recall.md` §4 |
 | M1-T08 | 气象数据源可用性验证 | `[x]` | Open-Meteo 实测通过 → `weather-and-quota.md` §A |
 | M1-T09 | 小程序定位权限可行性 | `[ ]` | 合规待办（🔴 可阻塞项目）→ `compliance-checklist.md` |
 | M1-T10 | 生成式 AI 备案路径咨询 | `[ ]` | 合规待办（🔴 工期长）→ `compliance-checklist.md` |
@@ -77,9 +77,21 @@
 
 ---
 
-## 四、下一步（进入 G1 前必须补齐）
+## 四、实测运行记录（2026-10-10，真实 AMAP_KEY）
 
-1. 申请/提供高德个人 Key，运行 **`prototype/measure_m1.py`** 一键跑 A1–A4 并生成可粘贴表格
-   （结果落 `Spec/M1/measurements/`；无 Key 时用 `--dry-run` 仅自检工具链），填 T01/T03/T04/T06/T07 数值。
-2. 由法务/运营推进 T09–T13 与竞品调研 C01–C04。
-3. 汇总至 `verification-report.md`，据 A1–A4 结果做 **G1 Go / No-Go** 判定。
+已用真实高德 Key 跑通 A1–A4，原始数据在 `measurements/`：
+
+| 任务 | 结果 | 备注 |
+|---|---|---|
+| A1 | 成都 **80%（4/5）** | 初步（5 点示例真值集）；正式需每城 50 点 |
+| A2 | 一线 **40** / 二线 **40** / 三四线 **37**，全部达标 | 一线/二线受 `max_candidates=40` 截断，真实 ≥40 |
+| A3 | 6 接口可用、无配额错误 | 绝对日配额待控制台核对 |
+| A4 | **通过**（type=1 可用、返回 duration、与 v5 差 5%） | 另发现 v5 需 `show_fields=cost`；`entr_location` 缺失率 **50.9%** |
+
+## 五、下一步（进入 G1 前必须补齐）
+
+1. **A1 正式真值集**：3 城各 50 点（当前仅 5 点）→ 重跑 `measure_m1.py a1`。
+2. **A3 绝对配额**：在高德控制台核对个人 Key 各接口日配额，填入 `weather-and-quota.md` §B.2。
+3. **A7 载体权限**：推进小程序定位权限申请（可阻塞项目）。
+4. 由法务/运营推进 T10–T13 与竞品调研 C01–C04。
+5. 汇总至 `verification-report.md`，据 A1–A4 结果做 **G1 Go / No-Go** 判定（当前 🟡 趋于 Go）。

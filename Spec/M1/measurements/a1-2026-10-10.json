@@ -1,0 +1,21 @@
+{
+  "task": "A1",
+  "date": "2026-10-10",
+  "city": "成都",
+  "tier": "二线",
+  "ground_truth_n": 5,
+  "recalled_n": 219,
+  "matched_n": 4,
+  "matched": [
+    "紫坪铺水库",
+    "三岔湖",
+    "东风水库",
+    "石象湖"
+  ],
+  "missed": [
+    "龙泉湖"
+  ],
+  "recall_rate": 0.8,
+  "threshold": 0.7,
+  "pass": true
+}

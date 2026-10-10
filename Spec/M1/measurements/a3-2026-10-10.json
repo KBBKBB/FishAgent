@@ -1,0 +1,44 @@
+{
+  "task": "A3",
+  "date": "2026-10-10",
+  "probes": {
+    "v3/place/around": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "OK"
+    },
+    "v3/place/text": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "OK"
+    },
+    "v3/place/polygon": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "OK"
+    },
+    "v3/distance": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "OK"
+    },
+    "v5/direction/driving": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "OK"
+    },
+    "v3/assistant/coordinate/convert": {
+      "reachable": true,
+      "status": "1",
+      "infocode": "10000",
+      "info": "ok"
+    }
+  },
+  "quota_error_interfaces": [],
+  "note": "绝对日配额须在高德控制台核对；本结果仅记录各接口可达性与配额类错误。"
+}

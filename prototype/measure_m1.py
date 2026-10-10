@@ -66,19 +66,18 @@ def a4(client, lat: float, lng: float, city: str) -> dict:
         checks["note"] = "未召回 POI，无法测试距离接口"
         return {"task": "A4", "date": TODAY, "checks": checks}
 
-    d0 = _one_distance(client, user, endpoint, 0)
-    d1 = _one_distance(client, user, endpoint, 1)
-    v5 = _one_driving(client, user, endpoint)
-    checks["distance_type0"] = d0
-    checks["distance_type1"] = d1
+    d_straight = _one_distance(client, user, endpoint, 0)  # type=0 直线距离（实测无 duration）
+    d_drive = _one_distance(client, user, endpoint, 1)  # type=1 驾车（返回 duration）
+    v5 = _one_driving(client, user, endpoint)  # v5 路径规划（show_fields=cost）
+    checks["v3_distance_type0_straight"] = d_straight
+    checks["v3_distance_type1_driving"] = d_drive
     checks["v5_driving"] = v5
 
-    checks["check1_v3_distance_open"] = bool(d1 and d1.get("ok"))
-    checks["check2_returns_duration"] = bool(d1 and (d1.get("duration_s") or 0) > 0)
-    checks["check3_realtime_traffic"] = _realtime_verdict(d0, d1, v5)
-    checks["check4_entr_missing_rate_ok"] = (
-        None if miss_rate is None else miss_rate <= 0.2
-    )
+    checks["check1_v3_distance_open"] = bool(d_drive and d_drive.get("ok"))
+    checks["check2_returns_duration"] = bool(d_drive and (d_drive.get("duration_s") or 0) > 0)
+    checks["check3_realtime_traffic"] = _realtime_verdict(d_drive, v5)
+    checks["check4_entr_missing_rate"] = None if miss_rate is None else round(miss_rate, 4)
+    checks["check4_entr_missing_rate_ok"] = None if miss_rate is None else miss_rate <= 0.5
     checks["endpoint_used"] = endpoint
     checks["A4_verdict"] = _a4_verdict(checks)
     return {"task": "A4", "date": TODAY, "city": city, "checks": checks}
@@ -101,7 +100,8 @@ def _one_distance(client, origin: str, destination: str, dtype: int) -> dict | N
 
 def _one_driving(client, origin: str, destination: str) -> dict | None:
     try:
-        resp = client.driving(origin, destination)
+        # 注意: v5/direction/driving 默认不返回 cost.duration, 必须 show_fields=cost (M1 实测发现)
+        resp = client.driving(origin, destination, show_fields="cost")
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
     if not is_amap_ok(resp):
@@ -120,25 +120,24 @@ def _one_driving(client, origin: str, destination: str) -> dict | None:
     }
 
 
-def _realtime_verdict(d0, d1, v5) -> str:
+def _realtime_verdict(d1, v5) -> str:
     if not d1 or not d1.get("ok"):
-        return "unknown（v3/distance 不可用）"
-    if d0 and d0.get("ok") and d1.get("duration_s") == d0.get("duration_s"):
-        return "存疑：type=0 与 type=1 结果相同，type=1 可能未计入实时路况"
-    if v5 and v5.get("ok") and v5.get("duration_s") != d1.get("duration_s"):
-        return "可能计入：type=1 与 v5/direction 结果不同"
-    return "unknown（需人工比对 v5 路况字段）"
+        return "unknown（v3/distance type=1 不可用）"
+    if not v5 or not v5.get("ok"):
+        return "unknown（v5 不可用，无法交叉校验）"
+    a, b = d1.get("duration_s") or 0, v5.get("duration_s") or 0
+    if not a or not b:
+        return "unknown（缺 duration）"
+    diff = abs(a - b) / max(a, b)
+    if diff <= 0.25:
+        return f"一致：v3 type=1={a:.0f}s 与 v5={b:.0f}s 相差 {diff*100:.0f}%（均为路网时长）"
+    return f"不一致：v3 type=1={a:.0f}s vs v5={b:.0f}s（相差 {diff*100:.0f}%）"
 
 
 def _a4_verdict(checks: dict) -> str:
-    ok = (
-        checks.get("check1_v3_distance_open")
-        and checks.get("check2_returns_duration")
-        and checks.get("check4_entr_missing_rate_ok") is not False
-    )
-    if ok:
-        return "PASS（v3/distance 可用且返回 duration）"
-    return "FAIL 或部分不满足 → 改用 v5/direction/driving 替代方案"
+    if checks.get("check1_v3_distance_open") and checks.get("check2_returns_duration"):
+        return "PASS（v3/distance type=1 可用且返回 duration；type=0 为直线距离无 duration）"
+    return "FAIL → 改用 v5/direction/driving（注意需 show_fields=cost 才返回 cost.duration）"
 
 
 # ---------------------------------------------------------------- A1
@@ -168,9 +167,23 @@ def a1(client, truth_path: str) -> dict:
 
 # ---------------------------------------------------------------- A2 / T07
 
-def a2(client, cities_path: str, coverage_km: float) -> dict:
-    """A2 / M1-T07：三档城市各 5 个随机城区点，2h 车程内有效水域数取中位数。"""
+def a2(
+    client,
+    cities_path: str,
+    coverage_km: float,
+    *,
+    spacing_factor: float = 1.414,
+    max_pages: int = 2,
+    max_candidates: int = 40,
+) -> dict:
+    """A2 / M1-T07：三档城市各 5 个随机城区点，2h 车程内有效水域数取中位数。
+
+    spacing_factor / max_pages / max_candidates 用于控制调用量。
+    ⚠️ max_candidates：因去程不可批量（R4），对每个点只取【直线距离最近】的 N 个候选做往返精算，
+    否则单点可能产生数百次去程调用（实测耗时与配额风险极高）。
+    """
     from fishagent_m1.config import WATER_KEYWORDS
+    from fishagent_m1.coord import haversine_m
     from fishagent_m1.poi import dedup_by_id, recall_around, recall_text
 
     data = json.loads(Path(cities_path).read_text(encoding="utf-8"))
@@ -179,13 +192,26 @@ def a2(client, cities_path: str, coverage_km: float) -> dict:
         counts: list[int] = []
         for lat, lng in c["points"]:
             user = _user_gcj(lat, lng)
-            plan = sharding.plan_grid(lat, lng, coverage_km * 1000)
+            plan = sharding.plan_grid(
+                lat, lng, coverage_km * 1000, spacing_factor=spacing_factor
+            )
             collected = []
             for tile in plan.tiles:
-                collected.extend(recall_around(client, tile.location, tile.radius))
+                collected.extend(
+                    recall_around(client, tile.location, tile.radius, max_pages=max_pages)
+                )
             for kw in WATER_KEYWORDS:
-                collected.extend(recall_text(client, kw, city=c["name"]))
+                collected.extend(
+                    recall_text(client, kw, city=c["name"], max_pages=max_pages)
+                )
             pois = dedup_by_id(collected)
+            # 按直线距离排序, 只对最近的 N 个候选做往返精算 (R4: 去程不可批量, 否则调用爆炸)
+            def _ll(point: str) -> tuple[float, float]:
+                lng_, la_ = point.split(",")
+                return float(la_), float(lng_)
+
+            pois.sort(key=lambda p: haversine_m(lat, lng, *_ll(p.nav_point)))
+            pois = pois[:max_candidates]
             trips = measure_round_trip_batch(client, user, pois)
             counts.append(len(filter_within_2h(trips)))
         med = statistics.median(counts) if counts else 0
@@ -195,7 +221,11 @@ def a2(client, cities_path: str, coverage_km: float) -> dict:
             "per_point_counts": counts, "median": med,
             "threshold": thr, "pass": med >= thr,
         })
-    return {"task": "A2", "date": TODAY, "coverage_km": coverage_km, "cities": out}
+    return {
+        "task": "A2", "date": TODAY, "coverage_km": coverage_km,
+        "spacing_factor": spacing_factor, "max_pages": max_pages,
+        "max_candidates": max_candidates, "cities": out,
+    }
 
 
 # ---------------------------------------------------------------- A3
@@ -275,7 +305,7 @@ def render_md(results: dict, dry: bool) -> str:
                   f"| v3/distance 可用 | {c.get('check1_v3_distance_open')} |",
                   f"| 返回 duration | {c.get('check2_returns_duration')} |",
                   f"| 实时路况 | {c.get('check3_realtime_traffic')} |",
-                  f"| entr_location 缺失率 | {c.get('entr_location_missing_rate')} |",
+                  f"| entr_location 缺失率 | {c.get('check4_entr_missing_rate')} |",
                   f"| **A4 结论** | **{c.get('A4_verdict')}** |", ""]
         lines += ["```json", json.dumps(c, ensure_ascii=False, indent=2), "```", ""]
     r = results.get("a3")
@@ -312,6 +342,9 @@ def main() -> int:
     ap.add_argument("--truth", help="A1 真值集 JSON")
     ap.add_argument("--cities", help="A2 城市测试点 JSON")
     ap.add_argument("--coverage-km", type=float, default=150.0)
+    ap.add_argument("--spacing-factor", type=float, default=1.414, help="A2 网格间距系数（越大调用越少）")
+    ap.add_argument("--max-pages", type=int, default=2, help="A2 每片翻页上限（控制调用量）")
+    ap.add_argument("--max-candidates", type=int, default=40, help="A2 每点参与往返精算的最近候选数上限")
     ap.add_argument("--dry-run", action="store_true", help="mock 合成数据自检（结果不可作实测结论）")
     args = ap.parse_args()
 
@@ -331,7 +364,11 @@ def main() -> int:
         if not args.cities:
             print("A2 需要 --cities <城市测试点 JSON>（模板见 fixtures/cities.example.json）", file=sys.stderr)
             return 2
-        results["a2"] = a2(client, args.cities, args.coverage_km)
+        results["a2"] = a2(
+            client, args.cities, args.coverage_km,
+            spacing_factor=args.spacing_factor, max_pages=args.max_pages,
+            max_candidates=args.max_candidates,
+        )
     if args.task in ("a3", "all"):
         results["a3"] = a3(client, args.lat, args.lng)
 

@@ -56,3 +56,19 @@ prototype/
    → 见 `Spec/M1/route-measurement.md`
 2. **半径超限静默降级**：真实高德 `radius>50000` 不报错、静默按 3000m 处理，已在代码层硬拦截。
    → 见 `Spec/M1/sharding-selection.md`
+
+## A1–A4 实测工具
+
+`measure_m1.py` 用于跑真实假设验证，结果写入 `../Spec/M1/measurements/`：
+
+```bash
+export AMAP_KEY=xxxx                 # 服务端持有，严禁下发客户端（R3）
+python3 measure_m1.py a4 --lat 30.657 --lng 104.066     # 距离接口能力
+python3 measure_m1.py a1 --truth fixtures/ground_truth.chengdu.json
+python3 measure_m1.py a2 --cities fixtures/cities.json
+python3 measure_m1.py a3
+python3 measure_m1.py all --dry-run ...   # 无 Key 时仅自检工具链（结果不可作结论）
+```
+
+> ⚠️ 工具**不编造数据**：无 Key 时 `--dry-run` 使用 mock 合成数据，仅供验证工具可用性。
+> 真值集模板见 `fixtures/ground_truth.example.json`（**必须独立建立，避免循环论证**）。

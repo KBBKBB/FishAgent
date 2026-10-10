@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# M1 实测工具 dry-run 自检产物（避免与真实数据混淆）
+Spec/M1/measurements/*-dryrun.json
+Spec/M1/measurements/latest-dryrun.md

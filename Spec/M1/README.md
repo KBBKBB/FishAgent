@@ -79,6 +79,7 @@
 
 ## 四、下一步（进入 G1 前必须补齐）
 
-1. 申请/提供高德个人 Key，跑 `prototype/demo.py`（真实模式），填 T01/T03/T04/T06/T07 数值。
+1. 申请/提供高德个人 Key，运行 **`prototype/measure_m1.py`** 一键跑 A1–A4 并生成可粘贴表格
+   （结果落 `Spec/M1/measurements/`；无 Key 时用 `--dry-run` 仅自检工具链），填 T01/T03/T04/T06/T07 数值。
 2. 由法务/运营推进 T09–T13 与竞品调研 C01–C04。
 3. 汇总至 `verification-report.md`，据 A1–A4 结果做 **G1 Go / No-Go** 判定。

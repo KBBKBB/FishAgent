@@ -53,6 +53,22 @@ class MockAmapClient:
     def distance(self, origins: str, destination: str, distance_type: int = 1) -> dict[str, Any]:
         return self.call("v3/distance", {"origins": origins, "destination": destination, "type": distance_type})
 
+    def driving(self, origin: str, destination: str, **kw: Any) -> dict[str, Any]:
+        # 合成路径规划响应: 结构与 v5/direction/driving 对齐
+        r = self._distance({"origins": origin, "destination": destination})
+        first = (r.get("results") or [{}])[0]
+        dur = float(first.get("duration") or 0)
+        return {
+            "status": "1", "info": "OK", "infocode": "10000",
+            "route": {"paths": [{"cost": {"duration": str(int(dur))}, "distance": first.get("distance")}]},
+        }
+
+    def convert_amap(self, locations: str, coordsys: str = "gps") -> dict[str, Any]:
+        from .coord import wgs84_to_gcj02
+        lng, lat = (float(x) for x in locations.split(","))
+        glat, glng = wgs84_to_gcj02(lat, lng)
+        return {"status": "1", "info": "OK", "infocode": "10000", "locations": f"{glng:.6f},{glat:.6f}"}
+
     def call(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         self.calls += 1
         if path.endswith("place/around"):
@@ -89,7 +105,8 @@ class MockAmapClient:
         return {"status": "1", "info": "OK", "infocode": "10000", "count": str(len(out)), "pois": out}
 
     def _polygon(self, params: dict[str, Any]) -> dict[str, Any]:
-        pts = [_parse_loc(p) for p in str(params.get("polygon") or "").split(";") if p]
+        raw = str(params.get("polygon") or "").replace(";", "|")
+        pts = [_parse_loc(p) for p in raw.split("|") if p]
         if not pts:
             return {"status": "0", "info": "EMPTY_POLYGON", "infocode": "MOCK"}
         lats = [p[0] for p in pts]

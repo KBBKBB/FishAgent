@@ -1,0 +1,14 @@
+[project]
+name = "fishagent-m1-prototype"
+version = "0.1.0"
+description = "FishAgent M1 调研深化可行原型 (坐标转换 + POI 召回 + 车程精算 + 鱼情规则)"
+requires-python = ">=3.11"
+dependencies = []          # 原型刻意零依赖 (仅标准库), 便于任意环境跑通
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

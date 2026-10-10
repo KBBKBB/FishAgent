@@ -26,7 +26,7 @@
 | M1-T06 | 各接口独立配额实测 | `[~]` | **6 接口均可用、无配额错误**；绝对额度待控制台 → `weather-and-quota.md` §B |
 | M1-T07 | 城区有效水域存量实测 | `[x]` | **一线 40 / 二线 40 / 三四线 37（达标）** → `poi-recall.md` §4 |
 | M1-T08 | 气象数据源可用性验证 | `[x]` | Open-Meteo 实测通过 → `weather-and-quota.md` §A |
-| M1-T09 | 小程序定位权限可行性 | `[ ]` | 合规待办（🔴 可阻塞项目）→ `compliance-checklist.md` |
+| M1-T09 | 小程序定位权限可行性 | `[~]` | 🔴 类目可能不符；**降级方案（地图选点）已明确** → `miniprogram-location-permission.md` |
 | M1-T10 | 生成式 AI 备案路径咨询 | `[ ]` | 合规待办（🔴 工期长）→ `compliance-checklist.md` |
 | M1-T11 | 高德条款 POI 缓存/持久化限制 | `[ ]` | 法务待办（🔴 护城河地基）→ `compliance-checklist.md` |
 | M1-T12 | 《数据源授权清单 v1》 | `[~]` | 初版已建 → `data-source-authorization.md` |
@@ -75,6 +75,7 @@
 | 《数据源授权清单 v1》 | `data-source-authorization.md` | ⏳ 初版 |
 | 法务书面结论 | `compliance-checklist.md` | ⏳ 待办清单 |
 | **G1 评审材料（一页纸）** | `g1-review.md` | ✅ 已备 |
+| **A7 定位权限可行性 + 申请包** | `miniprogram-location-permission.md` | ✅ 已备（含降级方案） |
 
 ---
 

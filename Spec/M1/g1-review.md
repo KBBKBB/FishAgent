@@ -77,6 +77,11 @@ AI 鱼口预测 + 黄金时段；钓鱼人 4.0 分 + 7.3 万人工核实钓场�
 4. **A7 载体权限**：已核实为 🔴 高风险（类目准入限制），但有明确降级路径——
    **改用「地图选点 + 行政区选择」即可不依赖定位权限上线**（详见 `miniprogram-location-permission.md`）。
    需产品侧确认是否接受该默认交互。
+5. **合规结论（T09–T13，M1 已产出，详见 `compliance-checklist.md`）**：
+   - **T09/A7 定位权限** 🔴 类目可能不符 → 降级「地图选点」，**不阻塞**；
+   - **T10 AI 备案** 🟡 走「**大模型登记 + 算法备案**」轻通道（**非**自研备案），主体须**独立法人**，**M2 内测前完成登记**；
+   - **T11 高德缓存限制** 🔴 **默认禁止缓存/落库、禁「制作衍生品」**（§3.5/§7.3）→ M2 须「**实时召回不落库**」，UGC 库须与高德字段**隔离**或取得**书面授权**（+ 技术服务许可 §3.2）；
+   - **T13 气象传播** 🟡 须「**气象信息服务单位备案**」；输出须由「数值播报」改为「**结论 + 分档因子**」（R8）。
 
 ---
 
@@ -103,5 +108,9 @@ AI 鱼口预测 + 黄金时段；钓鱼人 4.0 分 + 7.3 万人工核实钓场�
 | 分片方案（T02） | `sharding-selection.md` |
 | 竞品实证（C01–C04） | `competitor-research.md` |
 | 授权与合规 | `data-source-authorization.md` / `compliance-checklist.md` |
+| AI 备案路径（T10） | `ai-filing-compliance.md` |
+| 高德缓存/衍生限制（T11） | `amap-terms-caching.md` |
+| 气象信息传播合规（T13） | `weather-info-compliance.md` |
+| 定位权限（T09/A7） | `miniprogram-location-permission.md` |
 | 原始实测数据 | `measurements/` |
 | 汇总结论 | `verification-report.md` |

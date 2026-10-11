@@ -28,7 +28,7 @@
 | M1-T08 | 气象数据源可用性验证 | `[x]` | Open-Meteo 实测通过 → `weather-and-quota.md` §A |
 | M1-T09 | 小程序定位权限可行性 | `[~]` | 🔴 类目可能不符；**降级方案（地图选点）已明确** → `miniprogram-location-permission.md` |
 | M1-T10 | 生成式 AI 备案路径咨询 | `[~]` | 🟡 路径明确：**大模型登记（省级）+ 算法备案（生成合成类）**，非自研备案；主体须法人 → `ai-filing-compliance.md` |
-| M1-T11 | 高德条款 POI 缓存/持久化限制 | `[ ]` | 法务待办（🔴 护城河地基）→ `compliance-checklist.md` |
+| M1-T11 | 高德条款 POI 缓存/持久化限制 | `[~]` | 🔴 条款对照：**默认禁止缓存/落库，禁「制作衍生品」**；须事先书面同意 + 技术服务许可 → `amap-terms-caching.md` |
 | M1-T12 | 《数据源授权清单 v1》 | `[~]` | 初版已建 → `data-source-authorization.md` |
 | M1-T13 | 气象信息传播合规确认 | `[ ]` | 法务待办 → `compliance-checklist.md` |
 | M1-C01~C04 | 竞品调研（G1 必答） | `[ ]` | 分析框架 + 尖锐问题 → `competitor-research.md` |
@@ -77,6 +77,7 @@
 | **G1 评审材料（一页纸）** | `g1-review.md` | ✅ 已备 |
 | **A7 定位权限可行性 + 申请包** | `miniprogram-location-permission.md` | ✅ 已备（含降级方案） |
 | **T10 生成式 AI 备案路径结论** | `ai-filing-compliance.md` | ✅ 已备（登记 + 算法备案路径） |
+| **T11 高德 POI 缓存/持久化条款判定** | `amap-terms-caching.md` | ✅ 已备（禁落库/禁衍生 + 对策 A–D） |
 
 ---
 

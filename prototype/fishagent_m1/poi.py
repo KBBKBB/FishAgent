@@ -15,6 +15,7 @@ from .amap import AmapClient, amap_error, is_amap_ok
 from .config import (
     AMAP_AROUND_MAX_RADIUS,
     WATER_KEYWORDS,
+    WATER_TYPECODES,
     Config,
 )
 
@@ -115,6 +116,40 @@ def recall_around(
     return pois
 
 
+def recall_by_type(
+    client: AmapClient,
+    location: str,
+    radius: int,
+    *,
+    types: str = WATER_TYPECODES,
+    page_size: int = 25,
+    max_pages: int = 4,
+) -> list[WaterPoi]:
+    """路径 C: type 码搜索 (立项文档 4.2 的「type 码」路)。
+
+    实测 (2026-10-11): 水系 POI 归入 190200 自然地名 (含 190204 河流 / 190205 湖泊),
+    可按类型召回「江/浜/溪/淀」等【关键词路会漏掉】的水体。
+    """
+    validate_radius(radius)  # R2 硬校验
+    pois: list[WaterPoi] = []
+    for page in range(1, max_pages + 1):
+        resp = client.place_around(
+            location=location,
+            radius=radius,
+            types=types,
+            extensions="all",
+            offset=page_size,
+            page=page,
+        )
+        if not is_amap_ok(resp):
+            raise RuntimeError(f"place/around(types) 失败: {amap_error(resp)}")
+        batch = _parse_pois(resp, "type")
+        pois.extend(batch)
+        if len(batch) < page_size:
+            break
+    return pois
+
+
 def recall_text(
     client: AmapClient,
     keyword: str,
@@ -150,11 +185,16 @@ def recall_dual(
     *,
     city: str | None = None,
     keywords: tuple[str, ...] = tuple(WATER_KEYWORDS),
+    types: str = WATER_TYPECODES,
     dedup: bool = True,
 ) -> list[WaterPoi]:
-    """双路召回并集 (M1-T01): 周边搜索 ∪ 关键词搜索, 按 id 去重。"""
+    """双路召回并集 (M1-T01): type 码 ∪ 关键词搜索, 按 id 去重。
+
+    注: 立项文档 4.2 的「双路」= type 码 + 关键词。早期实现把 type 码路写成
+    「带关键词的周边搜索」, 与关键词路同源, 会系统性漏掉「江/浜/溪」类命名 (2026-10-11 实测)。
+    """
     merged: dict[str, WaterPoi] = {}
-    for poi in recall_around(client, location, radius):
+    for poi in recall_by_type(client, location, radius, types=types):
         merged.setdefault(poi.key, poi)
     for kw in keywords:
         for poi in recall_text(client, kw, city=city):

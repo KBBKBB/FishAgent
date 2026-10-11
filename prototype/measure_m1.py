@@ -28,7 +28,7 @@ from fishagent_m1.amap import AmapClient, amap_error, is_amap_ok
 from fishagent_m1.config import Config
 from fishagent_m1.coord import wgs84_to_gcj02
 from fishagent_m1.mock import MockAmapClient
-from fishagent_m1.poi import measure_recall
+from fishagent_m1.poi import measure_recall, recall_dual
 from fishagent_m1.route import filter_within_2h, measure_round_trip_batch
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "Spec" / "M1" / "measurements"
@@ -155,13 +155,16 @@ def a1(
     ⚠️ 早期版本仅用「城市中心 50km 单圆 + 翻页上限」，会低估召回率（半径与翻页双重截断）。
     """
     from fishagent_m1.config import WATER_KEYWORDS
-    from fishagent_m1.poi import dedup_by_id, recall_around, recall_text
+    from fishagent_m1.poi import dedup_by_id, recall_around, recall_by_type, recall_text
 
     truth = json.loads(Path(truth_path).read_text(encoding="utf-8"))
     lat, lng = truth["center_wgs84"]
     plan = sharding.plan_grid(lat, lng, coverage_km * 1000, spacing_factor=spacing_factor)
     collected = []
     for tile in plan.tiles:
+        # type 码路 (立项文档 4.2): 召回「江/浜/溪」类命名
+        collected.extend(recall_by_type(client, tile.location, tile.radius, max_pages=max_pages))
+        # 关键词路 (周边搜索带关键词)
         collected.extend(recall_around(client, tile.location, tile.radius, max_pages=max_pages))
     for kw in WATER_KEYWORDS:
         collected.extend(recall_text(client, kw, city=truth.get("city"), max_pages=max_pages))
@@ -208,7 +211,7 @@ def a2(
     """
     from fishagent_m1.config import WATER_KEYWORDS
     from fishagent_m1.coord import haversine_m
-    from fishagent_m1.poi import dedup_by_id, recall_around, recall_text
+    from fishagent_m1.poi import dedup_by_id, recall_around, recall_by_type, recall_text
 
     data = json.loads(Path(cities_path).read_text(encoding="utf-8"))
     out: list[dict] = []
@@ -221,6 +224,11 @@ def a2(
             )
             collected = []
             for tile in plan.tiles:
+                # type 码路 (立项文档 4.2)
+                collected.extend(
+                    recall_by_type(client, tile.location, tile.radius, max_pages=max_pages)
+                )
+                # 关键词路
                 collected.extend(
                     recall_around(client, tile.location, tile.radius, max_pages=max_pages)
                 )

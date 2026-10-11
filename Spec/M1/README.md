@@ -27,7 +27,7 @@
 | M1-T07 | 城区有效水域存量实测 | `[x]` | **一线 40 / 二线 40 / 三四线 37（达标）** → `poi-recall.md` §4 |
 | M1-T08 | 气象数据源可用性验证 | `[x]` | Open-Meteo 实测通过 → `weather-and-quota.md` §A |
 | M1-T09 | 小程序定位权限可行性 | `[~]` | 🔴 类目可能不符；**降级方案（地图选点）已明确** → `miniprogram-location-permission.md` |
-| M1-T10 | 生成式 AI 备案路径咨询 | `[ ]` | 合规待办（🔴 工期长）→ `compliance-checklist.md` |
+| M1-T10 | 生成式 AI 备案路径咨询 | `[~]` | 🟡 路径明确：**大模型登记（省级）+ 算法备案（生成合成类）**，非自研备案；主体须法人 → `ai-filing-compliance.md` |
 | M1-T11 | 高德条款 POI 缓存/持久化限制 | `[ ]` | 法务待办（🔴 护城河地基）→ `compliance-checklist.md` |
 | M1-T12 | 《数据源授权清单 v1》 | `[~]` | 初版已建 → `data-source-authorization.md` |
 | M1-T13 | 气象信息传播合规确认 | `[ ]` | 法务待办 → `compliance-checklist.md` |
@@ -76,6 +76,7 @@
 | 法务书面结论 | `compliance-checklist.md` | ⏳ 待办清单 |
 | **G1 评审材料（一页纸）** | `g1-review.md` | ✅ 已备 |
 | **A7 定位权限可行性 + 申请包** | `miniprogram-location-permission.md` | ✅ 已备（含降级方案） |
+| **T10 生成式 AI 备案路径结论** | `ai-filing-compliance.md` | ✅ 已备（登记 + 算法备案路径） |
 
 ---
 
@@ -95,5 +96,6 @@
 1. **A1 正式真值集**：3 城各 50 点（当前仅 5 点）→ 重跑 `measure_m1.py a1`。
 2. **A3 绝对配额**：在高德控制台核对个人 Key 各接口日配额，填入 `weather-and-quota.md` §B.2。
 3. **A7 载体权限**：推进小程序定位权限申请（可阻塞项目）。
-4. 由法务/运营推进 T10–T13 与竞品调研 C01–C04。
-5. 汇总至 `verification-report.md`，据 A1–A4 结果做 **G1 Go / No-Go** 判定（当前 🟡 趋于 Go）。
+4. **T10 已产出路径结论**（大模型登记 + 算法备案，非自研备案）→ 待推进**属地网信办口径咨询**与 M2 材料筹备；**T11/T13 由法务推进**，竞品调研 C01–C04 由运营推进。
+5. **合规前置**：确认主体为**独立法人企业**（T10 前置红线），并纳入 M2/M3 排期。
+6. 汇总至 `verification-report.md`，据 A1–A4 结果做 **G1 Go / No-Go** 判定（当前 🟡 趋于 Go）。

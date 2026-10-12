@@ -55,5 +55,33 @@ class TestRecommendSpots(unittest.TestCase):
         self.assertFalse(services.is_banned(normal))
 
 
+
+class TestBanZoneIntegration(unittest.TestCase):
+    def test_ban_zone_excludes_poi(self):
+        from pathlib import Path as _P
+
+        from fishagent.boundary import BanZoneIndex
+        from fishagent.mock import MockAmapClient
+
+        pois = [
+            {"id": "X1", "name": "禁区内水库", "type": "地名地址信息;自然地名;水库", "typecode": "190302",
+             "location": "104.055,30.655", "entr_location": None, "address": "测试"},
+            {"id": "X2", "name": "区外水库", "type": "地名地址信息;自然地名;水库", "typecode": "190302",
+             "location": "104.200,30.600", "entr_location": None, "address": "测试"},
+        ]
+        fixture = _P(__file__).resolve().parent.parent / "fixtures" / "ban_zones.sample.geojson"
+        ctx = services.ServiceContext(
+            MockAmapClient(pois=pois),
+            offline=True,
+            weather_forecast=lambda lat, lng, **kw: services.synthetic_weather_series(),
+            weather_archive=lambda lat, lng, **kw: [1015.0] * 10,
+            ban_index=BanZoneIndex.from_geojson(fixture),
+        )
+        r = services.recommend_spots(ctx, 30.657, 104.066, limit=10, coverage_km=40)
+        names = [x["name"] for x in r["spots"]]
+        self.assertNotIn("禁区内水库", names)   # R5：落入高危边界被排除
+        self.assertIn("区外水库", names)
+
+
 if __name__ == "__main__":
     unittest.main()

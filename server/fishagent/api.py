@@ -59,11 +59,35 @@ class Handler(BaseHTTPRequestHandler):
                 lat, lng = _floats(q, "lat", "lng")
                 limit = int(q.get("limit", ["5"])[0])
                 return self._send(200, services.recommend_spots(self.ctx, lat, lng, limit=limit))
+            if u.path == "/api/v1/analytics/summary":
+                return self._send(200, self.ctx.analytics.summary())
+            if u.path == "/api/v1/analytics/coverage":
+                return self._send(200, self.ctx.analytics.coverage())
             return self._send(404, {"error": "not_found", "path": u.path})
         except ValueError as exc:
             return self._send(400, {"error": "bad_request", "detail": str(exc)})
         except Exception as exc:  # noqa: BLE001 兜底为 500，避免泄露堆栈
             return self._send(500, {"error": "internal", "detail": str(exc)})
+
+
+    def do_POST(self) -> None:  # noqa: N802
+        u = urlparse(self.path)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, json.JSONDecodeError) as exc:
+            return self._send(400, {"error": "bad_request", "detail": f"非法 JSON: {exc}"})
+        try:
+            if u.path == "/api/v1/events":
+                name = payload.get("name")
+                if not name:
+                    return self._send(400, {"error": "bad_request", "detail": "缺少 name"})
+                ev = services.record_event(self.ctx, name, payload.get("props"), user_id=payload.get("user_id"))
+                return self._send(201, {"ok": True, "event": ev})
+            return self._send(404, {"error": "not_found", "path": u.path})
+        except ValueError as exc:
+            return self._send(400, {"error": "bad_request", "detail": str(exc)})
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8000, ctx=None) -> ThreadingHTTPServer:

@@ -15,10 +15,14 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import os
 from dataclasses import asdict
 
 from . import factors, sharding
 from .amap import AmapClient
+from .analytics import AnalyticsSink
+from .boundary import BanZoneIndex
+from .cache import TTLCache, grid_key
 from .config import WATER_KEYWORDS, Config
 from .coord import haversine_m, wgs84_to_gcj02
 from .mock import MockAmapClient
@@ -42,17 +46,24 @@ class ServiceContext:
         offline: bool = False,
         weather_forecast=None,
         weather_archive=None,
+        cache: TTLCache | None = None,
+        analytics: AnalyticsSink | None = None,
+        ban_index: BanZoneIndex | None = None,
     ) -> None:
         self.amap = amap
         self.offline = offline
         self._forecast = weather_forecast or fetch_forecast
         self._archive = weather_archive or fetch_archive_pressure
+        self.cache = cache if cache is not None else TTLCache()
+        self.analytics = analytics if analytics is not None else AnalyticsSink()
+        self.ban_index = ban_index if ban_index is not None else BanZoneIndex([], fallback_keywords=BANNED_KEYWORDS)
 
+    # —— 气象（M2-B14 缓存：气象 30min / 归档 6h）——
     def forecast(self, lat: float, lng: float, **kw) -> WeatherSeries:
-        return self._forecast(lat, lng, **kw)
+        return self.cache.get_or_set(grid_key("fc", lat, lng), lambda: self._forecast(lat, lng, **kw), ttl=1800)
 
     def archive(self, lat: float, lng: float, **kw) -> list[float]:
-        return self._archive(lat, lng, **kw)
+        return self.cache.get_or_set(grid_key("arch", lat, lng), lambda: self._archive(lat, lng, **kw), ttl=6 * 3600)
 
 
 def build_context(offline: bool = False) -> ServiceContext:
@@ -63,10 +74,19 @@ def build_context(offline: bool = False) -> ServiceContext:
             offline=True,
             weather_forecast=lambda lat, lng, **kw: synthetic_weather_series(),
             weather_archive=lambda lat, lng, **kw: [1010.0 + i * 0.02 for i in range(720)],
+            ban_index=_load_ban_index(),
         )
     cfg = Config()
     cfg.require_amap()  # R3: 密钥仅服务端持有
-    return ServiceContext(AmapClient(cfg), offline=False)
+    return ServiceContext(AmapClient(cfg), offline=False, ban_index=_load_ban_index())
+
+
+def _load_ban_index() -> BanZoneIndex:
+    """R5：优先加载权威矢量边界（FA_BAN_ZONES 指向 GeoJSON）；否则仅关键词兜底。"""
+    path = os.getenv("FA_BAN_ZONES")
+    if path and os.path.exists(path):
+        return BanZoneIndex.from_geojson(path, fallback_keywords=BANNED_KEYWORDS)
+    return BanZoneIndex([], fallback_keywords=BANNED_KEYWORDS)
 
 
 def synthetic_weather_series(*, hours: int = 96, base_pressure: float = 1015.0) -> WeatherSeries:
@@ -204,8 +224,21 @@ def recommend_spots(
         ctx.amap, user, candidates,
         computed_at=dt.datetime.now().isoformat(timespec="seconds"),
     )
-    within = [t for t in trips if t.within_2h and not is_banned(t.poi)]  # R4 + R5
+    def _banned(p: WaterPoi) -> bool:
+        """R5：优先权威矢量边界；坐标解析失败则回退关键词启发式。"""
+        try:
+            lng_, lat_ = (float(x) for x in p.location.split(","))
+        except ValueError:
+            return is_banned(p)
+        ok, _reason = ctx.ban_index.is_banned(lng_, lat_, name=p.name, type_=p.type, address=p.address)
+        return ok
+
+    within = [t for t in trips if t.within_2h and not _banned(t.poi)]  # R4 + R5
     within.sort(key=lambda t: t.total_s)
+    spots = [_trip_to_dict(t) for t in within[:limit]]
+
+    # 埋点（K04）：展示的推荐条数 → T02 分母
+    ctx.analytics.record("recommendation_shown", {"count": len(spots), "origin_wgs84": [lat, lng]})
 
     return {
         "generated_at": dt.datetime.now().isoformat(timespec="seconds"),
@@ -214,6 +247,13 @@ def recommend_spots(
         "recalled": len(pois),
         "evaluated": len(candidates),
         "within_2h": len(within),
-        "spots": [_trip_to_dict(t) for t in within[:limit]],
+        "spots": spots,
         "disclaimer": DISCLAIMER,
     }
+
+
+# ---------------------------------------------------------------- 埋点（M2-B13）
+
+def record_event(ctx: ServiceContext, name: str, props: dict | None = None, *, user_id: str | None = None) -> dict:
+    """记录关键埋点（K04）。事件名须在 analytics.K04_EVENTS 内，否则报错。"""
+    return ctx.analytics.record(name, props, user_id=user_id)

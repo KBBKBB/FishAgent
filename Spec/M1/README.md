@@ -29,7 +29,7 @@
 | M1-T09 | 小程序定位权限可行性 | `[~]` | 🔴 类目可能不符；**降级方案（地图选点）已明确** → `miniprogram-location-permission.md` |
 | M1-T10 | 生成式 AI 备案路径咨询 | `[~]` | 🟡 路径明确：**大模型登记（省级）+ 算法备案（生成合成类）**，非自研备案；主体须法人 → `ai-filing-compliance.md` |
 | M1-T11 | 高德条款 POI 缓存/持久化限制 | `[~]` | 🔴 条款对照：**默认禁止缓存/落库，禁「制作衍生品」**；须事先书面同意 + 技术服务许可 → `amap-terms-caching.md` |
-| M1-T12 | 《数据源授权清单 v1》 | `[~]` | 初版已建 → `data-source-authorization.md` |
+| M1-T12 | 《数据源授权清单》 | `[~]` | v2：**Open-Meteo**(数据 CC BY 4.0/免费层非商用/可自托管) + **高德**(禁缓存·禁衍生) 两层已核实 → `data-source-authorization.md` |
 | M1-T13 | 气象信息传播合规确认 | `[~]` | 🟡 须「气象信息服务单位**备案**」；禁发布/播报预报；数值改分档（R8）→ `weather-info-compliance.md` |
 | M1-C01~C04 | 竞品调研（G1 必答） | `[ ]` | 分析框架 + 尖锐问题 → `competitor-research.md` |
 
@@ -72,7 +72,7 @@
 | 竞品分析报告 | `competitor-research.md` | ⏳ 框架就绪，待人工下载复核 |
 | 分片方案选型结论 | `sharding-selection.md` | ✅ |
 | 配额实测对照表 | `weather-and-quota.md` §B | ⏳ 模板就绪 |
-| 《数据源授权清单 v1》 | `data-source-authorization.md` | ⏳ 初版 |
+| 《数据源授权清单 v2》 | `data-source-authorization.md` | ✅ 两层条款已核实（2026-10-12） |
 | 法务书面结论 | `compliance-checklist.md` | ⏳ 待办清单 |
 | **G1 评审材料（一页纸）** | `g1-review.md` | ✅ 已备 |
 | **A7 定位权限可行性 + 申请包** | `miniprogram-location-permission.md` | ✅ 已备（含降级方案） |

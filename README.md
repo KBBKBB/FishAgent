@@ -33,6 +33,22 @@ python3 -m pytest -q        # 21 项单元测试
 
 待办（依赖外部条件）：高德 Key 实测（A1–A4）、小程序定位权限（A7）、法务合规结论、竞品人工复核。
 
+## 下一阶段：M2 MVP（进行中）
+
+> **M2 打通「鱼情分析 + 钓位推荐」核心闭环**，交付可内测版本。
+
+已搭起**零依赖 Python** 服务端骨架 `server/`（沿用 M1 原型风格，预留 FastAPI 迁移位）：
+
+- **服务编排** `services.py`：鱼情分析（评分/分档/Top3 因子/可解释文本）与钓位推荐（往返 ≤2h）
+- **HTTP API**：`/health`、`/api/v1/fish-activity`、`/api/v1/spots`
+- **复用 M1 已验证引擎**：坐标转换 / 双路召回 / 网格分片 / 往返精算 / 规则引擎
+
+```bash
+cd server
+python3 app.py --offline --port 8000            # 无需任何 Key
+python3 -m unittest discover -s tests -t .      # 11 项单测
+```
+
 ## 文档结构
 
 ```
@@ -43,6 +59,7 @@ Spec/
 ├── Roadmap.md           # 何时做、做到什么程度、何时停手（M1–M5 + 决策门）
 └── M1/                  # M1 调研深化产出物（结论报告、选型、清单）
 prototype/               # M1 可行原型（零依赖 Python）
+server/                  # M2 MVP 服务端（零依赖 Python，标准库 HTTP）
 ```
 
 > **单一事实来源**：阈值类数据（验收指标、决策门、假设判定标准）以《项目立项文档.md》第八、九章为准。

@@ -1,0 +1,13 @@
+[project]
+name = "fishagent-server"
+version = "0.2.0"
+description = "FishAgent M2 MVP 服务端（零依赖 Python，标准库 HTTP）"
+requires-python = ">=3.11"
+dependencies = []          # M2 初期仅用标准库
+
+[project.optional-dependencies]
+# 待 CI 环境可安装依赖后迁移至 FastAPI（见 README「尚未完成」）
+web = ["fastapi", "uvicorn"]
+
+[project.scripts]
+fishagent-server = "app:main"

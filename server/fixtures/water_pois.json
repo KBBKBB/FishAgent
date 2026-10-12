@@ -1,0 +1,15 @@
+{
+  "_note": "M1 离线演示用合成水域 POI (GCJ-02)。字段结构对齐高德 v3/place 返回的 pois 数组。部分条目故意缺失 entr_location 以验证 M1-T03 缺失率回退逻辑。",
+  "pois": [
+    {"id": "B0FF001", "name": "三岔湖", "type": "风景名胜;风景名胜;湖泊", "typecode": "110101", "location": "104.288000,30.429000", "entr_location": "104.290000,30.431000", "address": "四川省成都市简阳市"},
+    {"id": "B0FF002", "name": "龙泉湖", "type": "风景名胜;风景名胜;湖泊", "typecode": "110101", "location": "104.291000,30.545000", "entr_location": "104.292000,30.546000", "address": "四川省成都市龙泉驿区"},
+    {"id": "B0FF003", "name": "府河", "type": "地名地址信息;自然地名;河流", "typecode": "190301", "location": "104.090000,30.660000", "entr_location": null, "address": "四川省成都市"},
+    {"id": "B0FF004", "name": "东风水库", "type": "地名地址信息;自然地名;水库", "typecode": "190302", "location": "104.150000,30.750000", "entr_location": "104.151000,30.751000", "address": "四川省成都市新都区"},
+    {"id": "B0FF005", "name": "清水河", "type": "地名地址信息;自然地名;河流", "typecode": "190301", "location": "104.020000,30.680000", "entr_location": null, "address": "四川省成都市青羊区"},
+    {"id": "B0FF006", "name": "升钟湖", "type": "风景名胜;风景名胜;湖泊", "typecode": "110101", "location": "105.900000,31.500000", "entr_location": "105.902000,31.502000", "address": "四川省南充市南部县"},
+    {"id": "B0FF007", "name": "石象湖", "type": "风景名胜;风景名胜;湖泊", "typecode": "110101", "location": "104.150000,30.200000", "entr_location": "104.151000,30.201000", "address": "四川省成都市蒲江县"},
+    {"id": "B0FF008", "name": "金马河", "type": "地名地址信息;自然地名;河流", "typecode": "190301", "location": "103.900000,30.700000", "entr_location": null, "address": "四川省成都市温江区"},
+    {"id": "B0FF009", "name": "李家鱼塘", "type": "地名地址信息;自然地名;池塘", "typecode": "190303", "location": "104.050000,30.620000", "entr_location": null, "address": "四川省成都市武侯区"},
+    {"id": "B0FF010", "name": "紫坪铺水库", "type": "地名地址信息;自然地名;水库", "typecode": "190302", "location": "103.580000,31.050000", "entr_location": "103.582000,31.052000", "address": "四川省成都市都江堰市"}
+  ]
+}

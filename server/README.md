@@ -18,6 +18,7 @@ server/
 │   ├── weather.py         # Open-Meteo 接入（pressure_msl + 30 天分布）
 │   ├── factors.py         # 鱼情规则引擎 F1–F7 + 可解释输出（R6/R8）
 │   ├── services.py        # 服务编排：两个核心用例
+│   ├── storage.py         # M2-B01 持久化（SQLite 起步，R7 位置粗化，预留 PostGIS）
 │   ├── cache.py           # M2-B14 进程内 TTL 缓存（气象/POI 网格）
 │   ├── analytics.py       # M2-B13 埋点（K04 关键事件强校验 + JSONL 落盘）
 │   ├── boundary.py        # M2-B11 禁钓权威矢量边界（GeoJSON + 射线法，R5）
@@ -37,6 +38,9 @@ export AMAP_KEY=xxxx && python3 app.py
 
 # 可选：加载权威禁钓矢量边界（R5，GeoJSON）
 export FA_BAN_ZONES=fixtures/ban_zones.sample.geojson
+
+# 可选：埋点落库（M2-B01，SQLite；不设则仅内存）
+export FA_DB=data/fishagent.db
 ```
 
 ### 接口
@@ -73,12 +77,12 @@ cd server && python3 -m unittest discover -s tests -t . -v
 | M2-B13 埋点（门禁 K04） | `analytics.py` + `POST /api/v1/events`（事件强校验，禁止漏埋） |
 | M2-B14 缓存层 | `cache.py`（气象 30min / 归档 6h，TTL + 命中统计） |
 | M2-B12 服务端 Key 管理（R3） | `config.py` / `amap.py`（**IP 白名单与 sig 待接入网关**） |
-| M2-B01 脚手架 | 本目录 |
+| M2-B01 脚手架 + 持久化 | 本目录；`storage.py`（SQLite 起步，预留 PostGIS） |
 
 ## 尚未完成（M2 待办）
 
-- [ ] 数据库 / PostGIS 初始化与持久化（M2-B01）
+- [ ] 迁移到 PostgreSQL + PostGIS（`storage.py` 接口已就绪，当前 SQLite）
 - [ ] 接入**官方**禁钓矢量数据（M2-B11 机制已就绪，当前用样例 GeoJSON）
 - [ ] 小程序前端（M2-F01..F06）
 - [ ] FastAPI 迁移（依赖可安装后）
-- [x] 埋点接口（M2-B13）／缓存层（M2-B14）／禁钓矢量过滤机制（M2-B11）
+- [x] 埋点接口（M2-B13）／缓存层（M2-B14）／禁钓矢量过滤机制（M2-B11）／持久化（M2-B01）

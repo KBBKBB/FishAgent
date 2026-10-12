@@ -37,5 +37,13 @@ class TestAnalytics(unittest.TestCase):
             self.assertEqual(json.loads(lines[0])["name"], "skip_reason")
 
 
+    def test_store_persistence(self):
+        from fishagent.storage import Database
+        db = Database(":memory:")
+        s = AnalyticsSink(store=db)
+        s.record("went_fishing", {"lat": 30.6571})
+        self.assertEqual(db.events_by_name()["went_fishing"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

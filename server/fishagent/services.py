@@ -24,6 +24,7 @@ from .analytics import AnalyticsSink
 from .boundary import BanZoneIndex
 from .cache import TTLCache, grid_key
 from .config import WATER_KEYWORDS, Config
+from .storage import Database
 from .coord import haversine_m, wgs84_to_gcj02
 from .mock import MockAmapClient
 from .poi import WaterPoi, dedup_by_id, recall_around, recall_by_type
@@ -75,10 +76,18 @@ def build_context(offline: bool = False) -> ServiceContext:
             weather_forecast=lambda lat, lng, **kw: synthetic_weather_series(),
             weather_archive=lambda lat, lng, **kw: [1010.0 + i * 0.02 for i in range(720)],
             ban_index=_load_ban_index(),
+            analytics=_make_analytics(),
         )
     cfg = Config()
     cfg.require_amap()  # R3: 密钥仅服务端持有
-    return ServiceContext(AmapClient(cfg), offline=False, ban_index=_load_ban_index())
+    return ServiceContext(AmapClient(cfg), offline=False, ban_index=_load_ban_index(), analytics=_make_analytics())
+
+
+def _make_analytics() -> AnalyticsSink:
+    """M2-B01/B13：埋点可选落库（FA_DB 指向 SQLite 文件；未设置则仅内存）。"""
+    path = os.getenv("FA_DB")
+    store = Database(path) if path else None
+    return AnalyticsSink(store=store)
 
 
 def _load_ban_index() -> BanZoneIndex:

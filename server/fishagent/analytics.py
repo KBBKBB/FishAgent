@@ -34,8 +34,9 @@ K04_EVENTS: frozenset[str] = frozenset({
 class AnalyticsSink:
     """内存 + 可选 JSONL 落盘的埋点接收器。"""
 
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, store=None) -> None:
         self.path = Path(path) if path else None
+        self.store = store  # 可选：storage.Database（M2-B01 持久化）
         self._events: list[dict] = []
         self._lock = threading.Lock()
 
@@ -54,6 +55,8 @@ class AnalyticsSink:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with self.path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+        if self.store is not None:
+            self.store.insert_event(name, event["props"], user_id=user_id, ts=event["ts"])
         return event
 
     def summary(self) -> dict:

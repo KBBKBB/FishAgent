@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fishagent import __version__
 from fishagent.api.fish_activity import router as fish_router
 from fishagent.api.meta import router as meta_router
+from fishagent.api.species import router as species_router
 from fishagent.api.spots import router as spots_router
 from fishagent.config import get_settings
 from fishagent.errors import ApiError, register_exception_handlers
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(meta_router)
     app.include_router(fish_router)
     app.include_router(spots_router)
+    app.include_router(species_router)
     app.include_router(_agent_router())
     if pilot_state is not None:
         app.include_router(pilot_router)

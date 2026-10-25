@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from fishagent.schemas import LatLon, SpotCandidate, WeatherSnapshot
+from fishagent.schemas import LatLon, SpotCandidate, SpotSpeciesQuery, WeatherSnapshot
 
 
 class ProviderError(RuntimeError):
@@ -18,6 +18,9 @@ class UpstreamQuotaExceeded(RuntimeError):
     Deliberately not a ProviderError: services treat ProviderError as a partial
     failure (skip shard / fall back), while quota exhaustion must abort the
     request and surface as HTTP 429.
+
+    Exception: the species endpoint (contract 4.6) degrades every provider
+    failure, including quota exhaustion, to HTTP 200 with ``degraded=true``.
     """
 
     def __init__(self, provider: str, retry_after_seconds: int) -> None:
@@ -54,3 +57,21 @@ class GeoProvider(Protocol):
         direction: str,
         route_key: str = "",
     ) -> int: ...
+
+
+@runtime_checkable
+class SpeciesProvider(Protocol):
+    """Community-backed fish-species lookup.
+
+    A real Xiaohongshu adapter implements this protocol and returns one raw
+    species list per input spot, in the same order. An empty list means the
+    water body has no usable community recommendation.
+    """
+
+    name: str
+    source_label: str
+
+    async def find_species(
+        self,
+        spots: list[SpotSpeciesQuery],
+    ) -> list[list[str]]: ...

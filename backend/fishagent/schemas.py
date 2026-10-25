@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Impact = Literal["positive", "neutral", "negative"]
 AlertLevel = Literal["danger", "warning", "info"]
 EntryPrecision = Literal["entr_location", "center_fallback"]
+SpeciesSource = Literal["xiaohongshu", "none"]
 
 
 class LatLon(BaseModel):
@@ -174,6 +175,45 @@ class SpotRecommendationResponse(BaseModel):
     spots: list[SpotOut]
     filtered: FilteredStats
     meta: SpotsMeta
+
+
+class SpotSpeciesQuery(BaseModel):
+    """One water body to look up in community posts."""
+
+    spot_id: str | None = Field(default=None, max_length=64)
+    name: str = Field(..., min_length=1, max_length=120)
+    water_type: str = Field(default="", max_length=40)
+    address: str = Field(default="", max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("name 不能为空")
+        return text
+
+
+class SpeciesQueryRequest(BaseModel):
+    spots: list[SpotSpeciesQuery] = Field(..., min_length=1, max_length=10)
+
+
+class SpotSpeciesResult(BaseModel):
+    spot_id: str | None = None
+    spot_name: str
+    species: list[str]
+    has_recommendation: bool
+    source: SpeciesSource
+    source_label: str = ""
+    note: str
+
+
+class SpeciesRecommendationResponse(BaseModel):
+    results: list[SpotSpeciesResult]
+    provider: str
+    degraded: bool = False
+    source_disclosure: str
+    generated_at: str
 
 
 class HealthResponse(BaseModel):

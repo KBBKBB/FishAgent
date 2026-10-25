@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="gpt-4o-mini", validation_alias="LLM_MODEL")
     llm_timeout_seconds: float = Field(default=30.0, validation_alias="LLM_TIMEOUT_SECONDS")
 
+    # Community species lookup (Step 3 "推荐鱼种"). Empty means "mock" in Mock
+    # mode and "none" otherwise, so real deployments never invent community data.
+    species_provider: str = Field(
+        default="", validation_alias="FISHAGENT_SPECIES_PROVIDER"
+    )
+    species_timeout_seconds: float = Field(
+        default=4.0,
+        gt=0,
+        le=30,
+        validation_alias="FISHAGENT_SPECIES_TIMEOUT_SECONDS",
+    )
+    species_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        le=86_400,
+        validation_alias="FISHAGENT_SPECIES_CACHE_TTL_SECONDS",
+    )
+
     # CR-03 pilot access. Every field below is inert unless
     # FISHAGENT_PUBLIC_ACCESS_ENABLED=true, so the S1 deployment is unchanged.
     public_access_enabled: bool = Field(

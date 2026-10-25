@@ -1,4 +1,4 @@
-# FishAgent MVP 接口与工程契约 v1.4
+# FishAgent MVP 接口与工程契约 v1.6
 
 > 本契约是并行开发的唯一字段依据。字段改名或语义变更必须先通知协调者（小项）并更新本文件。
 >
@@ -6,6 +6,8 @@
 > v1.2（2026-10-21）：裁决 F2 兜底区间外、F5 晴/雨口径、`best_windows` 数量、Agent 工具名、单程分钟取整。
 > v1.3（2026-10-22）：真实模式钓位改为水体类型召回 + 回程批量预筛 + 最近候选分批精算；`filtered` 增补 `unavailable/evaluated/unevaluated`，新增有界并发与限速配置。
 > v1.4（2026-10-23）：`GET /api/spots/recommend` 新增 `offset`（默认 0，0–20）用于“换一批”；评估目标改为 `offset+limit`（仍受 30 上限），返回 `eligible[offset:offset+limit]`；`eligible = returned + truncated_by_limit` 不变。商业 POI 过滤补充经营部/建材/商贸等后缀；评估批次改为 `max(limit, 10)`。
+> v1.5（2026-10-25）：新增 `POST /api/spots/species`（推荐鱼种）与 `SpeciesProvider` 注入点；明确空结果、降级与缓存口径。
+> v1.6（2026-10-25）：同步第二轮修复口径——降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；补物种相关配置与注入点。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -21,15 +23,20 @@ backend/                          # 小钱（agent/ 目录归小厚）
     core/coords.py                # wgs84_to_gcj02 / gcj02_to_wgs84（唯一转换入口）
     core/rules.py                 # F1–F7 评分、分档、Top3
     core/forbidden.py             # 禁钓过滤（保守排除）
-    providers/weather.py          # WeatherProvider 协议 + 工厂
+    core/species.py               # 鱼种白名单、别名归一、去重与截断
+    providers/base.py             # WeatherProvider / GeoProvider / SpeciesProvider 协议
     providers/open_meteo.py       # 真实气象适配器
     providers/weather_mock.py     # 确定性 Mock
     providers/amap.py             # 高德 POI/距离适配器
     providers/amap_mock.py        # 确定性 Mock
+    providers/species_mock.py     # 鱼种 Mock Provider
+    providers/species_none.py     # 不伪造社区数据的空 Provider
     services/fish_activity.py     # 聚合天气 + 规则引擎
     services/spots.py             # 召回 → 入口坐标 → 往返精算 → 过滤 → 排序
+    services/species.py           # 批量鱼种查询 + 进程内缓存 + 降级
     api/fish_activity.py          # GET /api/fish-activity
     api/spots.py                  # GET /api/spots/recommend
+    api/species.py                # POST /api/spots/species
     api/meta.py                   # GET /health, GET /api/demo/config
     agent/                        # 小厚
       graph.py                    # LangGraph 状态图
@@ -42,7 +49,7 @@ docs/                             # 小产（mvp-prd.md）、小项（计划/契
 fixtures/                         # 小产：演示场景
 ```
 
-**挂载约定**：`main.py` 必须挂载 `api.fish_activity.router`、`api.spots.router`、`api.meta.router`、`agent.router.router`；`agent/router.py` 由小厚提供，至少导出 `router`。`web/` 通过 `StaticFiles(html=True)` 挂到 `/`，API 优先匹配。
+**挂载约定**：`main.py` 必须挂载 `api.fish_activity.router`、`api.spots.router`、`api.species.router`、`api.meta.router`、`agent.router.router`；`agent/router.py` 由小厚提供，至少导出 `router`。`web/` 通过 `StaticFiles(html=True)` 挂到 `/`，API 优先匹配。
 
 ## 2. 通用约定
 
@@ -67,6 +74,11 @@ fixtures/                         # 小产：演示场景
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | LLM 网关 |
 | `LLM_MODEL` | `gpt-4o-mini` | 模型名 |
 | `LLM_TIMEOUT_SECONDS` | `30` | LLM 超时 |
+| `FISHAGENT_AMAP_CONCURRENCY` | `6` | 真实模式召回与路径规划并发上限 |
+| `FISHAGENT_AMAP_QPS` | `2` | 真实模式请求起间隔（秒） |
+| `FISHAGENT_SPECIES_PROVIDER` | 空 | `mock` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none` |
+| `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | `4.0` | 鱼种查询超时，范围 0 < x ≤ 30 |
+| `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | `3600` | 鱼种结果缓存秒数，范围 0–86400；0 表示不读不写缓存 |
 
 `.env.example` 只放占位符，严禁真实密钥入库。
 
@@ -291,21 +303,75 @@ fixtures/                         # 小产：演示场景
 
 返回 Mock 模式、默认演示坐标（杭州 30.2741/120.1551）、免责与 AI 标识文案，字段由小钱/小厚约定即可。
 
+### 4.6 `POST /api/spots/species`（CR-04，推荐鱼种）
+
+按钓位批量查询社区（小红书）网友分享的鱼种。**独立于钓位接口异步调用**：钓位列表先返回，本接口失败或超时只影响“推荐鱼种”一行，不影响钓位主流程。
+
+请求：
+
+```json
+{
+  "spots": [
+    { "spot_id": "mock_spot_001", "name": "青山水库", "water_type": "水库", "address": "示例地址" }
+  ]
+}
+```
+
+约束：`spots` 1–10 项；`name` 1–120 字符且去空格后不得为空；`spot_id`/`water_type`/`address` 可为空。
+
+响应 `SpeciesRecommendationResponse`：
+
+```json
+{
+  "results": [
+    {
+      "spot_id": "mock_spot_001",
+      "spot_name": "青山水库",
+      "species": ["草鱼", "鲤鱼"],
+      "has_recommendation": true,
+      "source": "xiaohongshu",
+      "source_label": "小红书（Mock）",
+      "note": "来自小红书网友分享，仅供参考"
+    }
+  ],
+  "provider": "mock",
+  "degraded": false,
+  "source_disclosure": "鱼种信息来自小红书网友分享，仅供参考，不承诺渔获；请出发前自行核实。",
+  "generated_at": "2026-10-25T10:00:00Z"
+}
+```
+
+口径：
+
+- 结果顺序与请求顺序一一对应；同一 `name|water_type` 的重复项只查询一次（按 strip 后的 `(name, water_type)` 元组归一）。
+- 请求字段上限：`spot_id` ≤ 64、`name` 1–120、`water_type` ≤ 40、`address` ≤ 200；`name` 去空格后不得为空。
+- 鱼种经过别名归一、去重、白名单过滤，单钓位最多 4 个，且只返回已知鱼种。
+- 查不到时 `species=[]`、`has_recommendation=false`、`source="none"`、`note="暂无相关鱼种推荐"`。
+- **降级语义**：Provider 超时、抛异常（含配额异常）、返回结构异常时，一律返回 200 + **全部空结果** + `degraded=true`；不得返回 5xx。结构异常包括：外层非 list、行数与本次实际查询数（缓存未命中项数）不符、单行不是 list/tuple。降级响应不得混入缓存中的非空结果。
+- **取消传播**：`asyncio.CancelledError` 必须向上传播，不得被降级逻辑吞掉。
+- **缓存**：进程内按归一化 `(name, water_type)` 元组缓存，重启清空、多 worker 不共享；成功非空结果 TTL 为 `FISHAGENT_SPECIES_CACHE_TTL_SECONDS`（默认 3600），空结果与降级结果 TTL 为 `min(TTL, 300)`；降级结果同样写入负缓存，避免上游故障时逐请求重打；TTL=0 时不读不写；缓存条目上限 2000，超限先清过期再全清。
+- `FISHAGENT_SPECIES_PROVIDER`：`mock` / `none` / `disabled`。留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none`；真实小红书适配器实现 `SpeciesProvider` 后在此注册。
+- **配额异常口径（2026-10-25 裁决）**：Provider 配额耗尽按本节降级为 200（不返回 429）；`providers/base.py` 中「配额异常应返回 429」的通用注释不适用于本端点。
+- 前端必须标注来源与“仅供参考”，不得承诺渔获；`degraded=true` 时文案必须与「暂无相关鱼种推荐」区分（如「鱼种信息暂不可用，仅供参考」）。
+
 ## 5. Mock 数据要求
 
 - **天气 Mock**：以 `(lat, lon, date, at)` 为种子确定性生成。五档通过查询参数 `scenario` 触发：`excellent`→极佳、`good`→良好、`fair`→一般、`poor`→偏差、`no_go`→劝退；未提供时按种子生成默认场景。必须包含气压 24h/3h/6h 变化、气温变温、风速、降水、云量、日出日落。`no_go` 场景至少包含暴雨/雷雨或 ≥5 级风，确保 `band=劝退`。
 - **POI Mock**：围绕用户坐标生成 ≥ 8 个候选水域（水库/湖泊/河流/野塘），包含：2 个往返 ≤2h、1 个单程 >1h 但往返 ≤2h、2 个往返 >2h、1 个禁钓区（名称含「一级保护区」或落入示例禁钓圆区）、1 个缺入口坐标的候选；结果确定性可复现。
 - **LLM 兜底**：不依赖外部网络；基于意图关键词与工具结果拼接中文回答。
+- **鱼种 Mock**：以 `name|water_type` 为种子确定性生成 1–3 个鱼种；约 1/5 的水域返回空列表，用于覆盖“暂无相关鱼种推荐”路径；`source_label` 必须含 `Mock` 标识。
 
 ### 5.1 测试注入点（小测使用）
 
 - Provider 通过 FastAPI 依赖函数获取：`get_weather_provider()`、`get_geo_provider()`（位于 `fishagent/deps.py` 或 `providers/__init__.py`，由小钱固定导出）。测试使用 `app.dependency_overrides[...]` 注入伪 Provider，用于 radius 上限 spy、往返时长构造、入口坐标缺失等场景。
 - 规则引擎为纯函数：`compute_fish_activity(weather, now, species=None)`，测试可直接构造 `WeatherSnapshot`，不依赖 HTTP。
+- 鱼种 Provider 通过 `get_species_provider()` 获取（`fishagent/deps.py`）；测试可用 `app.dependency_overrides[get_species_provider]` 注入伪 Provider，缓存可用 `reset_species_cache()` 清理。
 - 钓位候选构造可使用 `fixtures/` 下场景文件；小产提供演示数据，小测可另建测试专用 fixture，不修改他人文件。
 
 ## 6. UI 契约（小厚）
 
-- 页面 `/`：位置区（浏览器定位按钮 + 手动经纬度输入）→ 鱼情卡（总分、档位、Top3 因子、最佳时段、风险提示）→ 钓位列表（名称、类型、单程/往返时间、理由、导航链接）→ 对话区（示例问题快捷按钮：今天气压适合钓鱼吗 / 附近哪里野钓好 / 明早几点去最好）。
+- 页面 `/`：位置区（浏览器定位按钮 + 手动经纬度输入）→ 鱼情卡（总分、档位、Top3 因子、最佳时段、风险提示）→ 钓位列表（名称、类型、单程/往返时间、理由、推荐鱼种、导航链接）→ 对话区（示例问题快捷按钮：今天气压适合钓鱼吗 / 附近哪里野钓好 / 明早几点去最好）。
+- 钓位卡在理由下方显示“推荐鱼种：…”并标注来源与“仅供参考”；无结果显示“暂无相关鱼种推荐”。鱼种异步加载，不得阻塞钓位渲染。
 - 必须可见：`AI 生成 · 仅供参考` 标识、免责声明（不承诺渔获、遵守当地禁钓规定）、Mock 模式提示。
 - 不得在前端出现任何 Key；不得直接调用高德 Web 服务。
 - 移动端可用（宽度 375px 起不横向滚动）。
@@ -344,3 +410,5 @@ cd backend
 | v1.1 | 2026-10-21 | 明确 `alerts` 对象结构、`filtered` 统计不变式、统一 422、时区口径、Mock `scenario`、Provider 注入点；补全 F3/F4/F6 边界 | QA 计划 A-02~A-05 与实现确定性需要 |
 | v1.2 | 2026-10-21 | 裁决 F2 兜底区间外、F5 降水口径、`best_windows` 数量、工具名、单程分钟取整 | PRD 残留待裁决项；保证 PRD、实现与测试同口径 |
 | v1.3 | 2026-10-22 | 真实模式水体类型召回、回程批量预筛、分批精算、有界并发/限速；`filtered` 增补 `unavailable/evaluated/unevaluated` | 真实高德 100km 串行精算超时且关键词召回混入业务 POI |
+| v1.5 | 2026-10-25 | 新增 `POST /api/spots/species`（推荐鱼种）与 `SpeciesProvider` 注入点；明确空结果、降级与缓存口径 | CR-04：钓位卡展示小红书网友推荐鱼种 |
+| v1.6 | 2026-10-25 | 同步第二轮修复口径：降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；配额异常裁决为降级 200；补物种相关配置与注入点 | CR-04 实现收敛 |

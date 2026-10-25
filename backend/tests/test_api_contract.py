@@ -16,7 +16,13 @@ def test_required_routes_are_registered(client):
     response = client.get("/openapi.json")
     assert response.status_code == 200
     paths = response.json()["paths"]
-    for path in ("/health", "/api/fish-activity", "/api/spots/recommend", "/api/agent/chat"):
+    for path in (
+        "/health",
+        "/api/fish-activity",
+        "/api/spots/recommend",
+        "/api/spots/species",
+        "/api/agent/chat",
+    ):
         assert path in paths, f"missing route: {path}"
 
 

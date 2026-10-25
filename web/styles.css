@@ -1206,6 +1206,30 @@ h3 {
   background: var(--brand);
 }
 
+.spot-species {
+  margin: 9px 0 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.spot-species-label {
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+
+.spot-species-source {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.spot-species[data-empty="true"] {
+  color: var(--ink-soft);
+}
+
 .precision-warn {
   margin-top: 8px;
   padding: 6px 9px;

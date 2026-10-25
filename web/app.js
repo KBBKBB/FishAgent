@@ -10,6 +10,7 @@
   var DEFAULT_RADIUS_KM = 50;
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
+  var SPECIES_TIMEOUT_MS = 4500;
   var IOS_INSTALL_HINT_KEY = 'fishagent.iosInstallHintDismissed';
   var standaloneQuery =
     typeof window.matchMedia === 'function'
@@ -43,7 +44,10 @@
     spotsAll: [],
     spotsPage: 0,
     spotsPayload: null,
-    spotsBusy: false
+    spotsBusy: false,
+    speciesByKey: {},
+    speciesPending: {},
+    speciesError: {}
   };
 
   function $(id) {
@@ -364,14 +368,37 @@
     return base + '，请稍后重试。';
   }
 
-  async function requestJSON(path, options) {
+  async function requestJSON(path, options, config) {
     if (state.mockMode) return mockRequest(path, options || {});
+    var opts = config || {};
     if (navigator.onLine === false) {
       throw new Error('当前处于离线状态，无法获取实时数据；请恢复网络后重试。');
     }
     var init = Object.assign({}, options || {});
     init.headers = Object.assign({ Accept: 'application/json' }, (options && options.headers) || {});
-    var response = await fetch(path, init);
+    var controller = null;
+    var timer = null;
+    if (opts.timeoutMs > 0 && typeof AbortController === 'function') {
+      controller = new AbortController();
+      init.signal = controller.signal;
+      timer = setTimeout(function () {
+        controller.abort();
+      }, opts.timeoutMs);
+    }
+    var response = null;
+    try {
+      response = await fetch(path, init);
+    } catch (error) {
+      if (controller && controller.signal.aborted) {
+        var timeoutError = new Error('请求超时，请稍后重试。');
+        timeoutError.status = 0;
+        timeoutError.code = 'TIMEOUT';
+        throw timeoutError;
+      }
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     var data = null;
     try {
       data = await response.json();
@@ -381,6 +408,12 @@
     if (!response.ok) {
       var code = errorCode(data);
       if (response.status === 401 && AUTH_ERROR_CODES.indexOf(code) !== -1) {
+        if (opts.silent) {
+          var silentError = new Error('登录已过期，鱼种信息暂不可用。');
+          silentError.status = 401;
+          silentError.code = code;
+          throw silentError;
+        }
         var redirecting = redirectToLogin();
         var authError = new Error(
           redirecting ? '登录已过期，正在跳转登录页。' : extractErrorMessage(data, response.status)
@@ -427,6 +460,9 @@
     state.spotsPage = 0;
     state.spotsPayload = null;
     state.spotsBusy = true;
+    state.speciesByKey = {};
+    state.speciesPending = {};
+    state.speciesError = {};
     updateSpotsButton();
     renderActivityLoading();
     renderSpotsLoading();
@@ -482,6 +518,7 @@
     var filtered = Object.assign({}, payload.filtered || {});
     filtered.returned = visible.length;
     renderSpots(Object.assign({}, payload, { spots: visible, filtered: filtered }));
+    loadSpeciesForVisible(state.seq);
   }
 
   function spotsPageCount() {
@@ -911,6 +948,19 @@
       li.append(reasons);
     }
 
+    var key = spotKey(data);
+    var speciesLine = el('p', 'spot-species');
+    speciesLine.setAttribute('data-spot-key', key);
+    var knownSpecies = state.speciesByKey[key];
+    if (knownSpecies) {
+      fillSpeciesLine(speciesLine, knownSpecies);
+    } else if (state.speciesError[key]) {
+      showSpeciesError(speciesLine, state.speciesError[key]);
+    } else {
+      speciesLine.textContent = '推荐鱼种：加载中…';
+    }
+    li.append(speciesLine);
+
     if (data.entry_precision === 'center_fallback') {
       li.append(el('p', 'precision-warn', '该钓位缺少入口坐标，已回退至中心点，端点精度较低。'));
     }
@@ -944,6 +994,238 @@
     li.append(actions);
 
     return li;
+  }
+
+  function spotKey(spot) {
+    var data = spot && typeof spot === 'object' ? spot : {};
+    return String(data.id || '') + '|' + String(data.name || '');
+  }
+
+  function requestSpecies(spots) {
+    var payload = {
+      spots: spots.map(function (spot) {
+        return {
+          spot_id: spot && spot.id ? String(spot.id) : null,
+          name: spot && spot.name ? String(spot.name) : '',
+          water_type: spot && spot.water_type ? String(spot.water_type) : '',
+          address: spot && spot.address ? String(spot.address) : ''
+        };
+      })
+    };
+    return requestJSON(
+      '/api/spots/species',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      },
+      { silent: true, timeoutMs: SPECIES_TIMEOUT_MS }
+    );
+  }
+
+  function decorateSpeciesResult(result, data) {
+    var decorated = Object.assign({}, result);
+    decorated.degraded = !!(data && data.degraded === true);
+    decorated.disclosure =
+      data && typeof data.source_disclosure === 'string' ? data.source_disclosure : '';
+    return decorated;
+  }
+
+  function loadSpeciesForVisible(seq) {
+    var current = seq === undefined ? state.seq : seq;
+    var start = state.spotsPage * SPOT_LIMIT;
+    var visible = state.spotsAll.slice(start, start + SPOT_LIMIT);
+    var items = [];
+
+    visible.forEach(function (spot) {
+      var name = spot && typeof spot.name === 'string' ? spot.name.trim() : '';
+      // 后端要求 name 去空格后非空；空名称钓位不进入批量请求，避免整批 422。
+      if (!name) return;
+      var key = spotKey(spot);
+      if (state.speciesByKey[key] || state.speciesPending[key] === current) return;
+      items.push({ key: key, spot: spot });
+    });
+
+    if (!items.length) {
+      applySpeciesToDom();
+      return;
+    }
+
+    items.forEach(function (item) {
+      state.speciesPending[item.key] = current;
+      delete state.speciesError[item.key];
+    });
+    applySpeciesToDom();
+
+    var itemKeys = items.map(function (item) {
+      return item.key;
+    });
+
+    requestSpecies(
+      items.map(function (item) {
+        return item.spot;
+      })
+    )
+      .then(function (data) {
+        var stale = current !== state.seq;
+        if (!stale) {
+          var results = Array.isArray(data && data.results) ? data.results : [];
+          var bySpotId = {};
+          items.forEach(function (item) {
+            var id = item.spot && item.spot.id !== undefined && item.spot.id !== null
+              ? String(item.spot.id)
+              : '';
+            if (id && !Object.prototype.hasOwnProperty.call(bySpotId, id)) {
+              bySpotId[id] = item.key;
+            }
+          });
+
+          // 先按 spot_id 映射，避免服务端顺序变化导致串卡。
+          var assigned = {};
+          var assignedByIndex = {};
+          results.forEach(function (result, index) {
+            if (!result || typeof result !== 'object') return;
+            var rawId =
+              result.spot_id !== undefined && result.spot_id !== null ? String(result.spot_id) : '';
+            if (!rawId || !Object.prototype.hasOwnProperty.call(bySpotId, rawId)) return;
+            assignedByIndex[index] = true;
+            var key = bySpotId[rawId];
+            if (assigned[key]) return;
+            assigned[key] = true;
+            state.speciesByKey[key] = decorateSpeciesResult(result, data);
+          });
+
+          // spot_id 缺失或无法匹配时，回退到请求项 index（而非 visible index）。
+          results.forEach(function (result, index) {
+            if (!result || typeof result !== 'object' || assignedByIndex[index]) return;
+            var preferred = items[index] ? items[index].key : '';
+            var key = '';
+            if (preferred && !assigned[preferred]) {
+              key = preferred;
+            } else {
+              for (var i = 0; i < itemKeys.length; i += 1) {
+                if (!assigned[itemKeys[i]]) {
+                  key = itemKeys[i];
+                  break;
+                }
+              }
+            }
+            if (!key) return;
+            assigned[key] = true;
+            state.speciesByKey[key] = decorateSpeciesResult(result, data);
+          });
+
+          // degraded 且服务端未给出逐项结果时，也要展示降级说明而非“暂无”。
+          if (data && data.degraded === true) {
+            var fallbackNote =
+              typeof data.source_disclosure === 'string' ? data.source_disclosure : '';
+            items.forEach(function (item) {
+              if (state.speciesByKey[item.key]) return;
+              state.speciesByKey[item.key] = {
+                spot_id:
+                  item.spot && item.spot.id !== undefined && item.spot.id !== null
+                    ? String(item.spot.id)
+                    : null,
+                species: [],
+                has_recommendation: false,
+                source: 'none',
+                source_label: '',
+                note: fallbackNote,
+                degraded: true,
+                disclosure: fallbackNote
+              };
+            });
+          }
+          items.forEach(function (item) {
+            delete state.speciesError[item.key];
+          });
+        }
+        items.forEach(function (item) {
+          if (state.speciesPending[item.key] === current) delete state.speciesPending[item.key];
+        });
+        if (!stale) applySpeciesToDom();
+      })
+      .catch(function (error) {
+        items.forEach(function (item) {
+          if (state.speciesPending[item.key] === current) delete state.speciesPending[item.key];
+        });
+        if (current !== state.seq) return;
+        var message =
+          error && error.message ? String(error.message) : '鱼种加载失败，请稍后重试。';
+        items.forEach(function (item) {
+          state.speciesError[item.key] = message;
+        });
+        applySpeciesToDom();
+      });
+  }
+
+  function applySpeciesToDom() {
+    var nodes = document.querySelectorAll('.spot-species');
+    Array.prototype.forEach.call(nodes, function (node) {
+      var key = node.getAttribute('data-spot-key');
+      var result = state.speciesByKey[key];
+      if (result) {
+        fillSpeciesLine(node, result);
+        return;
+      }
+      if (state.speciesError[key]) {
+        showSpeciesError(node, state.speciesError[key]);
+        return;
+      }
+      node.removeAttribute('data-error');
+      if (state.speciesPending[key] === state.seq) {
+        node.removeAttribute('data-empty');
+        node.removeAttribute('data-degraded');
+        node.textContent = '推荐鱼种：加载中…';
+        return;
+      }
+      node.removeAttribute('data-degraded');
+      node.setAttribute('data-empty', 'true');
+      node.textContent = '推荐鱼种：暂无相关鱼种推荐';
+    });
+  }
+
+  function showSpeciesError(node, message) {
+    node.replaceChildren();
+    node.removeAttribute('data-degraded');
+    node.removeAttribute('data-empty');
+    node.setAttribute('data-error', 'true');
+    node.append(el('span', 'spot-species-label', '推荐鱼种：'));
+    node.append(document.createTextNode(message));
+  }
+
+  function fillSpeciesLine(node, result) {
+    var degraded = result.degraded === true;
+    // 降级时即使响应意外带了鱼种也不展示，避免误导。
+    var species = degraded
+      ? []
+      : Array.isArray(result.species)
+        ? result.species.filter(Boolean)
+        : [];
+    node.replaceChildren();
+    node.removeAttribute('data-error');
+    if (degraded) {
+      node.removeAttribute('data-empty');
+      node.setAttribute('data-degraded', 'true');
+      var note = typeof result.note === 'string' ? result.note.trim() : '';
+      // 服务端降级项可能复用空结果文案；这里必须替换，才能和“真无推荐”区分。
+      if (!note || note === '暂无相关鱼种推荐') note = '鱼种信息暂不可用，仅供参考';
+      node.append(el('span', 'spot-species-label', '推荐鱼种：'));
+      node.append(document.createTextNode(note));
+      return;
+    }
+    node.removeAttribute('data-degraded');
+    if (!species.length) {
+      node.setAttribute('data-empty', 'true');
+      node.append(el('span', 'spot-species-label', '推荐鱼种：'));
+      node.append(document.createTextNode('暂无相关鱼种推荐'));
+      return;
+    }
+    node.removeAttribute('data-empty');
+    node.append(el('span', 'spot-species-label', '推荐鱼种：'));
+    node.append(document.createTextNode(species.join('、')));
+    var label = result.source_label || '小红书';
+    node.append(el('span', 'spot-species-source', '来源：' + label + ' · 仅供参考'));
   }
 
   function appendChatMessage(role, text, options) {
@@ -1153,6 +1435,15 @@
     }
     if (url.pathname === '/api/spots/recommend') {
       return Promise.resolve(makeMockSpots());
+    }
+    if (url.pathname === '/api/spots/species') {
+      var speciesPayload = {};
+      try {
+        speciesPayload = JSON.parse((options && options.body) || '{}');
+      } catch (error) {
+        speciesPayload = {};
+      }
+      return Promise.resolve(makeMockSpecies(speciesPayload));
     }
     if (url.pathname === '/api/agent/chat') {
       var payload = {};
@@ -1405,6 +1696,52 @@
         generated_at: generatedAt
       }
     };
+  }
+
+  function makeMockSpecies(payload) {
+    var spots = Array.isArray(payload && payload.spots) ? payload.spots : [];
+    return {
+      results: spots.map(function (spot) {
+        var species = mockSpeciesForSpot(spot);
+        return {
+          spot_id: spot && spot.spot_id ? spot.spot_id : null,
+          spot_name: spot && spot.name ? spot.name : '',
+          species: species,
+          has_recommendation: species.length > 0,
+          source: species.length ? 'xiaohongshu' : 'none',
+          source_label: species.length ? '小红书（Mock）' : '',
+          note: species.length ? '来自小红书网友分享，仅供参考' : '暂无相关鱼种推荐'
+        };
+      }),
+      provider: 'mock',
+      degraded: false,
+      source_disclosure: '鱼种信息来自小红书网友分享，仅供参考，不承诺渔获；请出发前自行核实。',
+      generated_at: new Date().toISOString()
+    };
+  }
+
+  function mockSpeciesForSpot(spot) {
+    var name = String((spot && spot.name) || '');
+    var waterType = String((spot && spot.water_type) || '');
+    var pools = {
+      '水库': ['鲫鱼', '鲤鱼', '草鱼', '鲢鳙', '青鱼'],
+      '河流': ['鲫鱼', '鲤鱼', '白条', '马口', '翘嘴'],
+      '湖泊': ['鲫鱼', '鲤鱼', '鳊鱼', '鲢鳙', '翘嘴'],
+      '野塘': ['鲫鱼', '黑鱼', '黄颡鱼', '鲶鱼']
+    };
+    var pool = pools[waterType] || ['鲫鱼', '鲤鱼', '草鱼'];
+    var hash = 0;
+    for (var index = 0; index < name.length; index += 1) {
+      hash = (hash * 31 + name.charCodeAt(index)) % 100000007;
+    }
+    if (hash % 5 === 0) return [];
+    var count = 1 + (hash % 3);
+    var start = (hash >>> 3) % pool.length;
+    var species = [];
+    for (var offset = 0; offset < count; offset += 1) {
+      species.push(pool[(start + offset) % pool.length]);
+    }
+    return species;
   }
 
   function makeMockChat(message) {

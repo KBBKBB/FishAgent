@@ -1,0 +1,104 @@
+{
+  "100km": {
+    "elapsed_s": 20.25,
+    "filtered": {
+      "total_candidates": 650,
+      "forbidden": 9,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 631
+    },
+    "top5": [
+      {
+        "name": "古新河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 489,
+        "drive_seconds_round_trip": 978,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "西溪",
+        "water_type": "河流",
+        "drive_seconds_one_way": 627,
+        "drive_seconds_round_trip": 1254,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "东河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 738,
+        "drive_seconds_round_trip": 1476,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "中河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 849,
+        "drive_seconds_round_trip": 1698,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "希颜溪",
+        "water_type": "河流",
+        "drive_seconds_one_way": 887,
+        "drive_seconds_round_trip": 1774,
+        "entry_precision": "center_fallback"
+      }
+    ]
+  },
+  "50km": {
+    "elapsed_s": 13.19,
+    "filtered": {
+      "total_candidates": 50,
+      "forbidden": 9,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 31
+    },
+    "top5": [
+      {
+        "name": "古新河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 489,
+        "drive_seconds_round_trip": 978,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "西溪",
+        "water_type": "河流",
+        "drive_seconds_one_way": 627,
+        "drive_seconds_round_trip": 1254,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "东河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 738,
+        "drive_seconds_round_trip": 1476,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "中河",
+        "water_type": "河流",
+        "drive_seconds_one_way": 849,
+        "drive_seconds_round_trip": 1698,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "希颜溪",
+        "water_type": "河流",
+        "drive_seconds_one_way": 887,
+        "drive_seconds_round_trip": 1774,
+        "entry_precision": "center_fallback"
+      }
+    ]
+  }
+}

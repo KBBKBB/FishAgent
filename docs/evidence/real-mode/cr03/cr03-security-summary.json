@@ -1,0 +1,536 @@
+{
+  "base_mock_auth": "http://127.0.0.1:8022",
+  "base_quota": "http://127.0.0.1:8034",
+  "total": 45,
+  "passed": 42,
+  "failed": 3,
+  "failures": [
+    {
+      "id": "B09b-login-error-no-store",
+      "ok": false,
+      "detail": {
+        "cache-control": null
+      }
+    },
+    {
+      "id": "B09c-login-error-www-authenticate",
+      "ok": false,
+      "detail": {
+        "www-authenticate": null
+      }
+    },
+    {
+      "id": "B29-app-log-no-client-ip",
+      "ok": false,
+      "detail": "forwarded client IPs absent"
+    }
+  ],
+  "results": [
+    {
+      "id": "B01-login-page-headers",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "xfo": "DENY",
+        "cache": "no-store",
+        "csp": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+      }
+    },
+    {
+      "id": "B02-login-page-no-external-assets",
+      "ok": true,
+      "detail": "no external URLs"
+    },
+    {
+      "id": "B03-public-shell",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B03-public-manifest",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B03-public-service-worker",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B03-public-health",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B03-public-demo-config",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B04-no-token-fish-activity",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED",
+        "www": "Bearer realm=\"fishagent-pilot\"",
+        "cache": "no-store"
+      }
+    },
+    {
+      "id": "B04-no-token-usage",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED",
+        "www": "Bearer realm=\"fishagent-pilot\"",
+        "cache": "no-store"
+      }
+    },
+    {
+      "id": "B04-no-token-openapi",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED",
+        "www": "Bearer realm=\"fishagent-pilot\"",
+        "cache": "no-store"
+      }
+    },
+    {
+      "id": "B04-no-token-docs",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED",
+        "www": "Bearer realm=\"fishagent-pilot\"",
+        "cache": "no-store"
+      }
+    },
+    {
+      "id": "B05-malformed-token",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "INVALID_TOKEN"
+      }
+    },
+    {
+      "id": "B06-expired-token",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "TOKEN_EXPIRED",
+        "www": "Bearer realm=\"fishagent-pilot\"",
+        "cache": "no-store"
+      }
+    },
+    {
+      "id": "B07-correct-invite",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "expires_at": "2026-10-24T17:42:39Z"
+        },
+        "tokenInBody": false
+      }
+    },
+    {
+      "id": "B08-cookie-flags",
+      "ok": true,
+      "detail": "fishagent_pilot=v1.eyJleHAiOjE3OTI4NjM3NTksImlhdCI6MTc5MjgyMDU1OSwianRpIjoiNGY2NDMzNDUyYTlhNjQ4NyIsInN1YiI6InBpbG90In0.TFVqWL7IYCtPhV2TtYi0CDRL6-Q7RirEIWUm86eIrZI; HttpOnly; Max-Age=43200; Path=/; SameSite=lax; Secure"
+    },
+    {
+      "id": "B09-wrong-invite",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "INVALID_INVITE_CODE",
+        "cache": null,
+        "www": null
+      }
+    },
+    {
+      "id": "B09b-login-error-no-store",
+      "ok": false,
+      "detail": {
+        "cache-control": null
+      }
+    },
+    {
+      "id": "B09c-login-error-www-authenticate",
+      "ok": false,
+      "detail": {
+        "www-authenticate": null
+      }
+    },
+    {
+      "id": "B10-tampered-token",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "INVALID_TOKEN"
+      }
+    },
+    {
+      "id": "B11-usage-authenticated",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": {
+          "day": "2026-10-24",
+          "timezone": "Asia/Shanghai",
+          "providers": {
+            "amap": {
+              "used": 0,
+              "limit": 2000,
+              "remaining": 2000,
+              "exhausted": false
+            },
+            "open_meteo": {
+              "used": 0,
+              "limit": 1000,
+              "remaining": 1000,
+              "exhausted": false
+            },
+            "llm": {
+              "used": 0,
+              "limit": 200,
+              "remaining": 200,
+              "exhausted": false
+            }
+          },
+          "rate_limits": {
+            "ip_per_minute": 8,
+            "token_per_minute": 4,
+            "login_per_minute": 3
+          },
+          "llm_reserved_per_chat": 2
+        }
+      }
+    },
+    {
+      "id": "B12-session-authenticated",
+      "ok": true,
+      "detail": {
+        "authenticated": true,
+        "expires_at": "2026-10-24T17:42:39Z"
+      }
+    },
+    {
+      "id": "B13-session-anonymous",
+      "ok": true,
+      "detail": {
+        "authenticated": false
+      }
+    },
+    {
+      "id": "B14-logout-clears-cookie",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "set-cookie": "fishagent_pilot=\"\"; expires=Sat, 24 Oct 2026 05:42:39 GMT; Max-Age=0; Path=/; SameSite=lax"
+      }
+    },
+    {
+      "id": "B15-login-rate-limit",
+      "ok": true,
+      "detail": {
+        "sequence": [
+          [
+            401,
+            "INVALID_INVITE_CODE"
+          ],
+          [
+            401,
+            "INVALID_INVITE_CODE"
+          ],
+          [
+            401,
+            "INVALID_INVITE_CODE"
+          ],
+          [
+            429,
+            "RATE_LIMITED"
+          ]
+        ],
+        "retryAfter": "60"
+      }
+    },
+    {
+      "id": "B16-token-rate-limit",
+      "ok": true,
+      "detail": {
+        "sequence": [
+          [
+            200,
+            ""
+          ],
+          [
+            200,
+            ""
+          ],
+          [
+            200,
+            ""
+          ],
+          [
+            200,
+            ""
+          ],
+          [
+            429,
+            "RATE_LIMITED"
+          ]
+        ],
+        "retryAfter": "60",
+        "body": {
+          "detail": {
+            "code": "RATE_LIMITED",
+            "message": "请求过于频繁，请稍后再试"
+          }
+        }
+      }
+    },
+    {
+      "id": "B17-ip-rate-limit",
+      "ok": true,
+      "detail": {
+        "sequence": [
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            401,
+            "UNAUTHORIZED"
+          ],
+          [
+            429,
+            "RATE_LIMITED"
+          ]
+        ],
+        "retryAfter": "60"
+      }
+    },
+    {
+      "id": "B18-cors-preflight-allowed",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "acao": "http://allowed.example",
+        "acac": "true",
+        "methods": "GET, HEAD, POST, OPTIONS"
+      }
+    },
+    {
+      "id": "B19-cors-allowed-actual-response",
+      "ok": true,
+      "detail": {
+        "acao": "http://allowed.example",
+        "expose": "Retry-After"
+      }
+    },
+    {
+      "id": "B20-cors-preflight-denied",
+      "ok": true,
+      "detail": {
+        "status": 400,
+        "acao": null
+      }
+    },
+    {
+      "id": "B21-cors-denied-actual-response",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "acao": null
+      }
+    },
+    {
+      "id": "B22-quota-instance-non-mock",
+      "ok": true,
+      "detail": {
+        "status": "ok",
+        "version": "0.1.0",
+        "mock_mode": false
+      }
+    },
+    {
+      "id": "B22b-quota-instance-login",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "id": "B23-quota-open-meteo-429",
+      "ok": true,
+      "detail": {
+        "status": 429,
+        "code": "QUOTA_EXCEEDED",
+        "retryAfter": "37040",
+        "expectedRetryAfter": 37040,
+        "seconds": 0.005,
+        "body": "{\"detail\":{\"code\":\"QUOTA_EXCEEDED\",\"message\":\"今日上游配额已用尽，请明日再试\"}}"
+      }
+    },
+    {
+      "id": "B24-quota-amap-429",
+      "ok": true,
+      "detail": {
+        "status": 429,
+        "code": "QUOTA_EXCEEDED",
+        "retryAfter": "37040",
+        "expectedRetryAfter": 37040,
+        "seconds": 0.004,
+        "body": "{\"detail\":{\"code\":\"QUOTA_EXCEEDED\",\"message\":\"今日上游配额已用尽，请明日再试\"}}"
+      }
+    },
+    {
+      "id": "B25-quota-llm-429",
+      "ok": true,
+      "detail": {
+        "status": 429,
+        "code": "QUOTA_EXCEEDED",
+        "retryAfter": "37040",
+        "expectedRetryAfter": 37040,
+        "seconds": 0.002,
+        "body": "{\"detail\":{\"code\":\"QUOTA_EXCEEDED\",\"message\":\"今日上游配额已用尽，请明日再试\"}}"
+      }
+    },
+    {
+      "id": "B26-usage-after-quota",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "providers": {
+          "amap": {
+            "used": 0,
+            "limit": 0,
+            "remaining": 0,
+            "exhausted": true
+          },
+          "open_meteo": {
+            "used": 0,
+            "limit": 0,
+            "remaining": 0,
+            "exhausted": true
+          },
+          "llm": {
+            "used": 0,
+            "limit": 0,
+            "remaining": 0,
+            "exhausted": true
+          }
+        }
+      }
+    },
+    {
+      "id": "B27-no-upstream-connections",
+      "ok": true,
+      "detail": "listening 2026-10-24T13:39:56.586787"
+    },
+    {
+      "id": "B28-app-log-no-secrets",
+      "ok": true,
+      "detail": {
+        "inviteLeaked": false,
+        "markerLeaked": false,
+        "secretLeaked": false,
+        "tokenLeaked": false
+      }
+    },
+    {
+      "id": "B29-app-log-no-client-ip",
+      "ok": false,
+      "detail": "forwarded client IPs absent"
+    },
+    {
+      "id": "B30-access-log-peer-ip-observation",
+      "ok": true,
+      "detail": {
+        "note": "uvicorn default access log records the socket peer 127.0.0.1; no token/code/key and no forwarded client IP. Deployment guidance: disable/reduce access log if IP must not be retained.",
+        "sample": [
+          "INFO:     127.0.0.1:49986 - \"GET /health HTTP/1.1\" 200 OK",
+          "INFO:     127.0.0.1:49989 - \"GET /pilot/login HTTP/1.1\" 200 OK"
+        ]
+      }
+    },
+    {
+      "id": "B31-quota-log-no-secrets",
+      "ok": true,
+      "detail": [
+        "INFO:     Started server process [53240]",
+        "INFO:     Waiting for application startup.",
+        "INFO:     Application startup complete.",
+        "INFO:     Uvicorn running on http://127.0.0.1:8034 (Press CTRL+C to quit)",
+        "INFO:     127.0.0.1:49988 - \"GET /health HTTP/1.1\" 200 OK",
+        "INFO:     127.0.0.1:50044 - \"GET /health HTTP/1.1\" 200 OK"
+      ]
+    },
+    {
+      "id": "B32-8018-pid-unchanged",
+      "ok": true,
+      "detail": "TCP    0.0.0.0:8018           0.0.0.0:0              LISTENING       70828"
+    },
+    {
+      "id": "B33-8018-access-control-off",
+      "ok": true,
+      "detail": {
+        "login-page": 404,
+        "session-api": 404,
+        "usage-api": 404,
+        "openapi-no-auth": 200,
+        "docs-no-auth": 200
+      }
+    },
+    {
+      "id": "B34-fail-closed-missing-secrets",
+      "ok": true,
+      "detail": {
+        "returncode": 1,
+        "tail": [
+          "  File \"D:\\学习\\GitHubCode\\FishAgent\\backend\\fishagent\\pilot\\state.py\", line 46, in from_settings",
+          "    raise RuntimeError(",
+          "RuntimeError: FISHAGENT_PUBLIC_ACCESS_ENABLED=true requires FISHAGENT_PILOT_INVITE_CODE with at least 6 characters"
+        ]
+      }
+    },
+    {
+      "id": "B35-fail-closed-wildcard-cors",
+      "ok": true,
+      "detail": {
+        "returncode": 1,
+        "tail": [
+          "  File \"D:\\学习\\GitHubCode\\FishAgent\\backend\\fishagent\\pilot\\state.py\", line 95, in _parse_origins",
+          "    raise RuntimeError(",
+          "RuntimeError: FISHAGENT_PILOT_CORS_ORIGINS must list explicit origins, not *"
+        ]
+      }
+    }
+  ]
+}

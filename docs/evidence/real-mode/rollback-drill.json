@@ -1,0 +1,15 @@
+{
+  "stop_seconds": 0.51,
+  "unreachable_after_stop": true,
+  "health_error_after_stop": "URLError",
+  "mock_ready_seconds": 4.33,
+  "mock_health": {
+    "status": "ok",
+    "version": "0.1.0",
+    "mock_mode": true
+  },
+  "h5_badge_mock": "Mock 模式",
+  "stop_mock_seconds": 0.5,
+  "unreachable_after_mock_stop": true,
+  "failures": []
+}

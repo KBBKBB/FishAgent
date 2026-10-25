@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-23",
+  "switched_at": "2026-10-23T09:12+08:00",
+  "access_mode": "LAN（人类选项 B）",
+  "bind": "0.0.0.0:8018",
+  "lan_ip": "192.168.31.68",
+  "lan_url": "http://192.168.31.68:8018/",
+  "network": {
+    "interface_alias": "以太网",
+    "network_category": "Private",
+    "subnet": "192.168.31.0/24"
+  },
+  "firewall": {
+    "domain_profile_enabled": false,
+    "private_profile_enabled": false,
+    "public_profile_enabled": false,
+    "rule_added": false,
+    "note": "防火墙未启用，未新增放行规则；同一局域网设备可直接访问"
+  },
+  "checks": {
+    "health_localhost": {"http": 200, "mock_mode": false},
+    "health_lan": {"http": 200},
+    "h5_lan": {"http": 200},
+    "fish_lan": {"http": 200, "seconds": 1.57, "score": 91, "band": "极佳"},
+    "spots_50km_lan": {
+      "http": 200,
+      "seconds": 14.785,
+      "mock_mode": false,
+      "top5": ["锦江", "府河", "东湖", "西郊河", "清水河"],
+      "all_natural_water": true,
+      "forbidden": 0
+    }
+  },
+  "security_notes": [
+    "服务无登录鉴权，同一局域网内任何设备均可访问；仅向受邀用户分享地址",
+    "CORS 为 allow_origins=*；仅限可信内网，不得将 8018 端口映射到公网",
+    "本机防火墙三个配置档均未启用；如后续启用防火墙，需放行 Private 配置档 TCP 8018",
+    "IP 由路由器 DHCP 分配，重启路由器或租约变化后可能变更，每日启动需复核"
+  ],
+  "pending": [
+    "试点微信群与群名",
+    "首批 3–5 人定向邀请",
+    "受邀手机实测访问"
+  ]
+}

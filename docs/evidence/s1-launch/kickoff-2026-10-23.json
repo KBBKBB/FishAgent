@@ -1,0 +1,73 @@
+{
+  "s1_status": "started",
+  "started_at": "2026-10-23T08:53:44+08:00",
+  "city": "成都及郊区",
+  "service": {
+    "endpoint": "http://127.0.0.1:8018",
+    "health": "ok",
+    "mock_mode": false,
+    "version": "0.1.0",
+    "h5_http": 200
+  },
+  "baseline": {
+    "fish_activity": {
+      "http": 200,
+      "seconds": 1.331,
+      "score": 91,
+      "band": "极佳",
+      "windows": ["05:40-08:40", "16:25-18:25"]
+    },
+    "spots_50km": {
+      "http": 200,
+      "seconds": 12.722,
+      "returned": 5,
+      "filtered": {
+        "total_candidates": 49,
+        "forbidden": 0,
+        "unavailable": 0,
+        "over_two_hours": 0,
+        "eligible": 10,
+        "truncated_by_limit": 5,
+        "evaluated": 10,
+        "unevaluated": 39
+      },
+      "top5": [
+        {"name": "锦江", "water_type": "河流", "round_trip_s": 980, "entry_precision": "center_fallback"},
+        {"name": "府河", "water_type": "河流", "round_trip_s": 1160, "entry_precision": "center_fallback"},
+        {"name": "锦江", "water_type": "河流", "round_trip_s": 1668, "entry_precision": "center_fallback"},
+        {"name": "东湖", "water_type": "湖泊", "round_trip_s": 1862, "entry_precision": "center_fallback"},
+        {"name": "西郊河", "water_type": "河流", "round_trip_s": 1868, "entry_precision": "center_fallback"}
+      ],
+      "all_natural_water": true,
+      "navigation_urls_present": true,
+      "max_round_trip_s": 1868
+    }
+  },
+  "weather_today": {
+    "date": "2026-10-23",
+    "weather_code": 53,
+    "condition": "毛毛雨（降雨日）",
+    "temp_max_c": 20.4,
+    "temp_min_c": 13.5,
+    "precipitation_mm": 1.6,
+    "wind_max_kmh": 4.5,
+    "source": "open-meteo forecast"
+  },
+  "invite_policy": {
+    "target_users_min": 3,
+    "target_users_max": 5,
+    "default_radius_km": 50,
+    "optional_radius_km": 100,
+    "public_recruitment": false
+  },
+  "pending_human": [
+    "试点微信群建立并提供群名",
+    "首批 3-5 名定向邀请",
+    "群内 P0/P1 实时消息测试"
+  ],
+  "pending_s1_period": [
+    "晴好天气样本（已记录 2026-10-23 降雨日）",
+    "P95 统计",
+    "D4 控制台截图（可选后补）"
+  ]
+}

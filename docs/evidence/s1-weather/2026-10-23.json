@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-23",
+  "city": "成都",
+  "location": {"lat": 30.657, "lon": 104.066},
+  "source": "open-meteo forecast API",
+  "weather_code": 53,
+  "condition": "毛毛雨（降雨日）",
+  "category": "rain",
+  "temp_max_c": 20.4,
+  "temp_min_c": 13.5,
+  "precipitation_mm": 1.6,
+  "wind_max_kmh": 4.5,
+  "coverage_progress": {"rain_days": 1, "sunny_days": 0, "required_rain": 1, "required_sunny": 1}
+}

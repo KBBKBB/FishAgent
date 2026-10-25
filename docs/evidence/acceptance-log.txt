@@ -1,0 +1,148 @@
+[PASS] HTTP 200 /health
+[PASS] health mock mode
+[PASS] health version
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96
+[PASS] fish timezone
+[PASS] fish generated_at UTC
+[PASS] fish ai disclosure
+[PASS] fish 7 factors
+[PASS] fish top_factors <= 3
+[PASS] fish best_windows count
+[PASS] fish water depth
+[PASS] fish alerts are objects
+[PASS] fish suitable_species non-empty
+[PASS] fish data_sources present
+[PASS] fish weather_summary present
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96&scenario=excellent
+[PASS] scenario excellent band
+[PASS] scenario excellent windows
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96&scenario=good
+[PASS] scenario good band
+[PASS] scenario good windows
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96&scenario=fair
+[PASS] scenario fair band
+[PASS] scenario fair windows
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96&scenario=poor
+[PASS] scenario poor band
+[PASS] scenario poor windows
+[PASS] HTTP 200 /api/fish-activity?lat=30.2741&lon=120.1551&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96&scenario=no_go
+[PASS] scenario no_go band
+[PASS] scenario no_go windows
+[PASS] no_go has three forced alerts
+[PASS] no_go alerts forced
+[PASS] HTTP 200 /api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=100&limit=5
+[PASS] filtered invariant total
+[PASS] filtered invariant eligible
+[PASS] spots returned <= limit
+[PASS] spots six filtered fields
+[PASS] 青山水库 round-trip = out + back
+[PASS] 青山水库 within 2h
+[PASS] 青山水库 navigation https
+[PASS] 青山水库 location_gcj02
+[PASS] 青山水库 entry_location_gcj02
+[PASS] 青山水库 entry precision
+[PASS] 青山水库 one-way half-up
+[PASS] 白鹭湾野塘 round-trip = out + back
+[PASS] 白鹭湾野塘 within 2h
+[PASS] 白鹭湾野塘 navigation https
+[PASS] 白鹭湾野塘 location_gcj02
+[PASS] 白鹭湾野塘 entry_location_gcj02
+[PASS] 白鹭湾野塘 entry precision
+[PASS] 白鹭湾野塘 one-way half-up
+[PASS] 环城河湾 round-trip = out + back
+[PASS] 环城河湾 within 2h
+[PASS] 环城河湾 navigation https
+[PASS] 环城河湾 location_gcj02
+[PASS] 环城河湾 entry_location_gcj02
+[PASS] 环城河湾 entry precision
+[PASS] 环城河湾 one-way half-up
+[PASS] 南湖湿地 round-trip = out + back
+[PASS] 南湖湿地 within 2h
+[PASS] 南湖湿地 navigation https
+[PASS] 南湖湿地 location_gcj02
+[PASS] 南湖湿地 entry_location_gcj02
+[PASS] 南湖湿地 entry precision
+[PASS] 南湖湿地 one-way half-up
+[PASS] 云岭湖 round-trip = out + back
+[PASS] 云岭湖 within 2h
+[PASS] 云岭湖 navigation https
+[PASS] 云岭湖 location_gcj02
+[PASS] 云岭湖 entry_location_gcj02
+[PASS] 云岭湖 entry precision
+[PASS] 云岭湖 one-way half-up
+[PASS] user location WGS84 + GCJ02
+[PASS] spots generated_at UTC
+[PASS] spots traffic basis
+[PASS] HTTP 200 /api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=51&limit=5
+[PASS] radius 51 accepted per contract
+[PASS] HTTP 422 /api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=151&limit=5
+[PASS] HTTP 200 /api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=150&limit=5
+[PASS] radius 150 accepted
+[PASS] HTTP 200 /api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=1&limit=5
+[PASS] radius 1 empty not error
+[PASS] HTTP 422 /api/spots/recommend?lat=30.2741&lon=120.1551&limit=11
+[PASS] HTTP 422 /api/fish-activity?lat=30.2741&lon=120.1551&species=%E9%B2%88%E9%B1%BC
+[PASS] invalid species code
+[PASS] chat 200 今天气压适合钓鱼吗？
+[PASS] chat 2-5 sentences 今天气压适合钓鱼吗？
+[PASS] chat tool 今天气压适合钓鱼吗？
+[PASS] chat mode 今天气压适合钓鱼吗？
+[PASS] chat disclosure 今天气压适合钓鱼吗？
+[PASS] chat no promises 今天气压适合钓鱼吗？
+[PASS] chat 200 附近哪里野钓好？
+[PASS] chat 2-5 sentences 附近哪里野钓好？
+[PASS] chat tool 附近哪里野钓好？
+[PASS] chat mode 附近哪里野钓好？
+[PASS] chat disclosure 附近哪里野钓好？
+[PASS] chat no promises 附近哪里野钓好？
+[PASS] chat 200 明早几点去最好？
+[PASS] chat 2-5 sentences 明早几点去最好？
+[PASS] chat tool 明早几点去最好？
+[PASS] chat mode 明早几点去最好？
+[PASS] chat disclosure 明早几点去最好？
+[PASS] chat no promises 明早几点去最好？
+[PASS] chat 501 chars 422
+[PASS] chat missing location 422
+[PASS] HTTP 200 /
+[PASS] static page has disclosure
+[PASS] web has no API keys
+[PASS] web no third-party hosts
+[PASS] HTTP 200 /api/fish-activity?lat=30.28&lon=120.16
+[PASS] HTTP 200 /api/spots/recommend?lat=30.28&lon=120.16&radius_km=100&limit=5
+[PASS] UI mode badge
+[PASS] UI default coords
+[PASS] UI manual coords applied
+[PASS] UI score matches API
+[PASS] UI band matches API
+[PASS] UI timezone visible
+[PASS] UI AI disclosure
+[PASS] UI weather heading
+[PASS] UI current-factor note
+[PASS] UI no promise words
+[PASS] UI top factors
+[PASS] UI source line
+[PASS] UI best window
+[PASS] UI filtered 候选 9 个
+[PASS] UI filtered 禁钓排除 2
+[PASS] UI filtered 往返超 2 小时 2
+[PASS] UI filtered 符合条件 5
+[PASS] UI zero truncation hidden
+[PASS] UI spot count
+[PASS] UI first spot name
+[PASS] UI nav is amap https
+[PASS] UI round trip shown
+[PASS] UI spots timezone
+[PASS] UI chat 2-5 今天气压适合钓鱼吗？
+[PASS] UI chat no promises 今天气压适合钓鱼吗？
+[PASS] UI chat 2-5 附近哪里野钓好？
+[PASS] UI chat no promises 附近哪里野钓好？
+[PASS] UI chat 2-5 明早几点去最好？
+[PASS] UI chat no promises 明早几点去最好？
+[PASS] UI chat transcript no undefined/NaN
+[PASS] UI chat AI disclosure
+[PASS] UI body no undefined/NaN
+[PASS] UI no horizontal scroll 375px
+[PASS] UI no horizontal scroll 1280px
+[PASS] UI no console errors
+[PASS] UI no failed requests
+[PASS] UI no third-party requests

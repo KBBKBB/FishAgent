@@ -1,0 +1,1338 @@
+{
+  "schema_version": "1.0",
+  "document": {
+    "title": "FishAgent MVP 手工验收演示脚本",
+    "version": "1.2",
+    "owner": "小产",
+    "date": "2026-10-21",
+    "purpose": "按本文件顺序执行，即可在 Mock 模式完成 FishAgent MVP 的演示与验收；结果可直接作为 docs/qa-report.md 的输入。",
+    "basis": [
+      "docs/mvp-prd.md v1.2",
+      "docs/api-contract.md v1.2",
+      "docs/project-plan.md"
+    ],
+    "scope_note": "仅覆盖本轮 Mock MVP；真实 Key、小程序、备案、UGC 不在本脚本范围。"
+  },
+  "environment": {
+    "base_url": "http://127.0.0.1:8000",
+    "mock_mode": true,
+    "python_bin": "C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe",
+    "install_command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pip install -e \"backend[dev]\"",
+    "start_command": "cd backend && \"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m uvicorn fishagent.main:app --host 127.0.0.1 --port 8000",
+    "test_command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q",
+    "ruff_command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m ruff check backend",
+    "default_location": {
+      "lat": 30.2741,
+      "lon": 120.1551,
+      "name": "杭州西湖"
+    },
+    "llm_key_expected": "empty",
+    "preconditions": [
+      "仓库已按 docs/api-contract.md §7 安装依赖",
+      "FISHAGENT_MOCK_MODE=true（默认）",
+      "LLM_API_KEY 为空；不配置 AMAP_WEB_KEY",
+      "服务运行在 127.0.0.1:8000"
+    ]
+  },
+  "execution": {
+    "order": "按 scenarios[].order 升序执行；同一场景内按 steps[].step 顺序执行",
+    "pass_rule": "场景内所有 P0 断言通过 = PASS；任一 P0 断言失败 = FAIL；环境缺失无法执行 = BLOCKED",
+    "global_assertions": [
+      "所有 4xx/5xx 响应体均为 {\"detail\":{\"code\":\"...\",\"message\":\"...\"}}",
+      "所有 422 的 detail.code 为 VALIDATION_ERROR；非法 species 为 INVALID_SPECIES",
+      "任何响应都不含堆栈、真实密钥或完整经纬度日志"
+    ],
+    "verdict_values": ["PASS", "FAIL", "BLOCKED", "N/A"],
+    "assertion_language": {
+      "status": "HTTP 状态码",
+      "body": "响应 JSON",
+      "text_of(array)": "将字符串数组以可读文本拼接（用于 data_sources 等）",
+      "alerts_has": "alerts 中存在 code 等于指定值且 level/forced 符合期望的对象元素",
+      "contains_any": "文本包含任一关键词",
+      "contains_all": "文本包含全部关键词",
+      "every": "对数组每项成立",
+      "sum": "求和"
+    },
+    "evidence_required": [
+      "scenario_id",
+      "request",
+      "response_excerpt",
+      "assertion_results",
+      "verdict",
+      "tester",
+      "timestamp",
+      "defect_id（如有）"
+    ],
+    "defect_levels": {
+      "P0": "阻断验收：红线违反（radius/往返/禁钓/密钥）、主流程不可用、合规文案缺失、接口 500",
+      "P1": "重要：契约补充项、标注缺失、可读性/性能问题、五档种子偏差",
+      "P2": "一般：文案、样式、非关键字段"
+    },
+    "failure_triage": {
+      "DEMO-FA-05.score<40": "若仅分数未低于 40，但 band/advice/alerts 均正确，判为 B-03 种子调参缺陷（P1），演示前必须修正，避免出现高分劝退。",
+      "DEMO-SPOT-03": "半径硬校验为红线，任一条失败均 P0。",
+      "DEMO-CHAT-*": "fallback 意图错误为 P0；措辞不佳为 P2。",
+      "DEMO-UI-02 密钥/隐私": "发现 Key 或精确定位持久化为 P0，立即阻断。"
+    },
+    "estimated_minutes": 35
+  },
+  "mock_seed_contract": {
+    "note": "B-03（天气 Mock）必须支持 /api/fish-activity?scenario=excellent|good|fair|poor|no_go 确定性触发五档（仅 Mock 生效）；at 用于锁定时间窗口。同一 (lat, lon, at, scenario) 连续 3 次结果一致。种子只约束档位与关键天气条件，精确分数可在目标区间内调参。",
+    "timezone": "at 带时区时按其转换；不带时区按 Asia/Shanghai 解释；generated_at 始终 UTC；响应 timezone=Asia/Shanghai。",
+    "short_repeat_note": "无 at 参数的接口（钓位推荐、对话）在 Mock 下按小时取整种子，保证 60 秒内重复请求结果一致。",
+    "scenario_map": {
+      "excellent": "极佳",
+      "good": "良好",
+      "fair": "一般",
+      "poor": "偏差",
+      "no_go": "劝退（必须包含 RAINSTORM/GALE/PRESSURE_PLUNGE 强制提示）"
+    },
+    "seeds": [
+      {
+        "id": "SEED-EXCELLENT",
+        "scenario": "excellent",
+        "at": "2026-04-11T21:30:00Z",
+        "local_time": "2026-04-12 05:30 Asia/Shanghai",
+        "profile": "气压缓降约 5hPa/24h、1012hPa、气温 20℃、24h 变温 1℃、2–3 级风、多云无雨、日出窗口",
+        "target_band": "极佳",
+        "target_score": "85–100"
+      },
+      {
+        "id": "SEED-GOOD",
+        "scenario": "good",
+        "at": "2026-04-12T22:30:00Z",
+        "local_time": "2026-04-13 06:30 Asia/Shanghai",
+        "profile": "气压稳定约 ±1hPa、1010hPa、气温 22℃、24h 变温 4℃、4 级风、多云无雨、日出窗口",
+        "target_band": "良好",
+        "target_score": "70–84"
+      },
+      {
+        "id": "SEED-FAIR",
+        "scenario": "fair",
+        "at": "2026-04-14T02:00:00Z",
+        "local_time": "2026-04-14 10:00 Asia/Shanghai",
+        "profile": "气压缓升约 4hPa/24h、1008hPa、气温 26℃、24h 变温 5℃、4 级风、无雨、春秋非窗口",
+        "target_band": "一般",
+        "target_score": "55–69"
+      },
+      {
+        "id": "SEED-POOR",
+        "scenario": "poor",
+        "at": "2026-04-15T04:00:00Z",
+        "local_time": "2026-04-15 12:00 Asia/Shanghai",
+        "profile": "气压骤升约 10hPa/24h、1018hPa、气温 30℃、24h 变温 9℃、1 级风、连续晴热、晴",
+        "target_band": "偏差",
+        "target_score": "40–54"
+      },
+      {
+        "id": "SEED-DETERRENT",
+        "scenario": "no_go",
+        "at": "2026-06-20T06:00:00Z",
+        "local_time": "2026-06-20 14:00 Asia/Shanghai",
+        "profile": "雷雨、1002hPa、骤降约 12hPa/24h、24h 变温 -9℃、6 级风、云量 >70%、气温 >32℃",
+        "target_band": "劝退",
+        "target_score": "<40",
+        "alerts_required": [
+          "RAINSTORM(danger, forced=true)",
+          "GALE(danger, forced=true)",
+          "PRESSURE_PLUNGE(warning, forced=true)"
+        ]
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "order": 1,
+      "id": "DEMO-ENV-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "环境就绪与健康检查",
+      "requirement_refs": ["DoD-1", "G5"],
+      "preconditions": ["服务已启动", "Mock 模式"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/health",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" http://127.0.0.1:8000/health"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.status == \"ok\"",
+            "body.version == \"0.1.0\"",
+            "body.mock_mode == true"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "http",
+          "optional": true,
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/demo/config",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" http://127.0.0.1:8000/api/demo/config"
+          },
+          "expected_status_any": [200, 404],
+          "assertions": [
+            "若 status==200：body 含 Mock 模式、默认演示坐标（30.2741/120.1551）或免责文案之一",
+            "若 status==404：记录 N/A，不阻塞（契约 §4.5 为可选端点）"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" http://127.0.0.1:8000/"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "Content-Type 含 text/html",
+            "页面文本含 \"FishAgent\"",
+            "页面文本含 \"AI 生成\""
+          ]
+        }
+      ],
+      "pass_criteria": "三步通过（第 2 步可为 N/A）",
+      "on_fail": "检查启动日志、端口占用、Mock 配置；P0 阻断后续演示"
+    },
+    {
+      "order": 2,
+      "id": "DEMO-FA-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "五档：极佳",
+      "requirement_refs": ["AT-FA-01", "FR-FA-02", "FR-FA-03"],
+      "preconditions": ["Seed SEED-EXCELLENT"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-11T21%3A30%3A00Z&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-11T21%3A30%3A00Z&location_name=%E6%9D%AD%E5%B7%9E%E8%A5%BF%E6%B9%96\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == \"极佳\"",
+            "85 <= body.score <= 100",
+            "body.advice == \"强烈建议出钓\"",
+            "len(body.factors) == 7",
+            "body.factors.map(f => f.code) == [\"F1\",\"F2\",\"F3\",\"F4\",\"F5\",\"F6\",\"F7\"]",
+            "body.factors.map(f => f.max_score) == [25,20,15,15,10,10,5]",
+            "every(body.factors, f => 0 <= f.score <= f.max_score)",
+            "sum(body.factors.map(f => f.score)) == body.score",
+            "body.factors[0].score == 25",
+            "body.factors[3].score == 15",
+            "len(body.top_factors) == 3",
+            "body.top_factors[0].code == \"F1\"",
+            "every(body.top_factors, t => body.factors.some(f => f.code == t.code && f.score == t.score && f.max_score == t.max_score))",
+            "len(body.alerts) == 0",
+            "body.timezone == \"Asia/Shanghai\"",
+            "len(body.best_windows) == 2",
+            "every(body.best_windows, w => w.start < w.end && len(w.label) > 0)",
+            "body.best_windows.some(w => w.label == \"日出窗口\")",
+            "body.best_windows.some(w => w.label == \"日落窗口\")",
+            "every(body.best_windows, w => /^([01]\\d|2[0-3]):[0-5]\\d$/.test(w.start) && /^([01]\\d|2[0-3]):[0-5]\\d$/.test(w.end))",
+            "len(body.water_depth) > 0",
+            "len(body.suitable_species) >= 1",
+            "body.ai_disclosure == \"本结论由 AI 辅助生成，仅供参考，不承诺渔获。\"",
+            "text_of(body.data_sources) contains_any [\"Mock\",\"规则引擎\"]",
+            "body.generated_at matches ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+            "-8 <= body.weather_summary.pressure_change_24h <= -2.1",
+            "2 <= body.weather_summary.wind_level <= 3",
+            "body.weather_summary.is_thunderstorm == false"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "若 band 不是极佳，优先检查 F1/F3/F4/F6 种子画像与权重上限；记录 B-03/B-04 缺陷"
+    },
+    {
+      "order": 3,
+      "id": "DEMO-FA-02",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "五档：良好",
+      "requirement_refs": ["AT-FA-02", "FR-FA-02", "FR-FA-03"],
+      "preconditions": ["Seed SEED-GOOD"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=good&at=2026-04-12T22%3A30%3A00Z",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=good&at=2026-04-12T22%3A30%3A00Z\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == \"良好\"",
+            "70 <= body.score <= 84",
+            "body.advice == \"适合出钓\"",
+            "body.factors[0].score == 18",
+            "body.factors[3].score == 8",
+            "body.weather_summary.wind_level == 4",
+            "len(body.best_windows) == 2",
+            "body.best_windows.some(w => w.label == \"日出窗口\")",
+            "body.best_windows.some(w => w.label == \"日落窗口\")",
+            "len(body.alerts) == 0",
+            "body.timezone == \"Asia/Shanghai\"",
+            "len(body.factors) == 7",
+            "sum(body.factors.map(f => f.score)) == body.score",
+            "body.ai_disclosure == \"本结论由 AI 辅助生成，仅供参考，不承诺渔获。\""
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "检查气压稳定档（18）与 4 级风（8）的边界实现"
+    },
+    {
+      "order": 4,
+      "id": "DEMO-FA-03",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "五档：一般",
+      "requirement_refs": ["AT-FA-03", "FR-FA-02", "FR-FA-03", "FR-FA-06"],
+      "preconditions": ["Seed SEED-FAIR"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=fair&at=2026-04-14T02%3A00%3A00Z",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=fair&at=2026-04-14T02%3A00%3A00Z\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == \"一般\"",
+            "55 <= body.score <= 69",
+            "body.advice == \"有机会，建议挑时段\"",
+            "body.factors[0].score == 12",
+            "len(body.best_windows) == 2",
+            "body.best_windows.some(w => w.label == \"日出窗口\")",
+            "body.best_windows.some(w => w.label == \"日落窗口\")",
+            "len(body.alerts) == 0",
+            "body.timezone == \"Asia/Shanghai\"",
+            "len(body.factors) == 7",
+            "sum(body.factors.map(f => f.score)) == body.score"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "检查缓升档（12）与「一般」档双窗口输出；窗口不足记 P1"
+    },
+    {
+      "order": 5,
+      "id": "DEMO-FA-04",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "五档：偏差",
+      "requirement_refs": ["AT-FA-04", "FR-FA-02", "FR-FA-03"],
+      "preconditions": ["Seed SEED-POOR"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=poor&at=2026-04-15T04%3A00%3A00Z",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=poor&at=2026-04-15T04%3A00%3A00Z\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == \"偏差\"",
+            "40 <= body.score <= 54",
+            "body.advice == \"不太理想，建议就近作钓\"",
+            "body.factors[0].score == 5",
+            "body.factors[2].score == 0",
+            "body.factors[4].score == 5",
+            "len(body.best_windows) == 1",
+            "body.best_windows[0].label == \"日出窗口\"",
+            "len(body.alerts) == 0",
+            "body.timezone == \"Asia/Shanghai\"",
+            "len(body.factors) == 7",
+            "sum(body.factors.map(f => f.score)) == body.score"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "检查骤升档（5）、变温 >8（3）、连续晴热（5）口径"
+    },
+    {
+      "order": 6,
+      "id": "DEMO-FA-05",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "五档：劝退（雷雨强制）",
+      "requirement_refs": ["AT-FA-05", "FR-FA-02", "FR-FA-05"],
+      "preconditions": ["Seed SEED-DETERRENT"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=no_go&at=2026-06-20T06%3A00%3A00Z",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=no_go&at=2026-06-20T06%3A00%3A00Z\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == \"劝退\"",
+            "body.score < 40",
+            "body.advice == \"今天不建议出钓\"",
+            "len(body.best_windows) == 0",
+            "alerts_has(body.alerts, \"RAINSTORM\", \"danger\", true)",
+            "alerts_has(body.alerts, \"GALE\", \"danger\", true)",
+            "alerts_has(body.alerts, \"PRESSURE_PLUNGE\", \"warning\", true)",
+            "text_of(body.alerts.map(a => a.message)) contains_any [\"雷雨\",\"暴雨\"]",
+            "text_of(body.alerts.map(a => a.message)) contains_any [\"风\",\"≥5级\",\"5级\"]",
+            "text_of(body.alerts.map(a => a.message)) contains_any [\"骤降\"]",
+            "text_of(body.alerts.map(a => a.message)) contains_any [\"2–4\",\"2-4\",\"2~4\",\"2 至 4\"]",
+            "every(body.alerts, a => a.code && [\"danger\",\"warning\",\"info\"].includes(a.level) && typeof a.forced == \"boolean\" && a.message.length > 0)",
+            "body.timezone == \"Asia/Shanghai\"",
+            "body.recommendation contains_any [\"雷雨\",\"暴雨\"]",
+            "body.recommendation contains_any [\"不建议\",\"劝退\",\"一票否决\"]",
+            "body.weather_summary.is_thunderstorm == true",
+            "body.weather_summary.wind_level >= 5",
+            "body.weather_summary.pressure_change_24h < -8",
+            "len(body.factors) == 7",
+            "sum(body.factors.map(f => f.score)) == body.score",
+            "body.factors[0].score == 15",
+            "body.factors[1].score == 12",
+            "body.factors[3].score <= 3",
+            "body.factors[4].score == 0"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "若 band/advice/alerts 正确但 score>=40，判 B-03 种子调参缺陷（P1），演示前修正；若 band 未强制劝退，判 B-04 P0"
+    },
+    {
+      "order": 7,
+      "id": "DEMO-FA-06",
+      "priority": "P0",
+      "blocking": true,
+      "type": "unit",
+      "title": "分档边界 40/55/70/85 与 v1.1/v1.2 规则补全",
+      "requirement_refs": ["FR-FA-02", "FR-FA-03", "6.1.1", "6.1.4", "6.1.5"],
+      "preconditions": ["B-04 暴露分档函数或等价可测试入口"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "unit",
+          "instruction": "调用规则引擎的分档函数（或构造总分后调用等价的纯函数），逐一断言下列映射；若未暴露入口，记 P1 可测试性缺陷并请小钱补充。",
+          "command_hint": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q -k \"band or boundary\"",
+          "cases": [
+            {"score": 0, "expected_band": "劝退", "expected_advice": "今天不建议出钓"},
+            {"score": 39, "expected_band": "劝退", "expected_advice": "今天不建议出钓"},
+            {"score": 40, "expected_band": "偏差", "expected_advice": "不太理想，建议就近作钓"},
+            {"score": 54, "expected_band": "偏差", "expected_advice": "不太理想，建议就近作钓"},
+            {"score": 55, "expected_band": "一般", "expected_advice": "有机会，建议挑时段"},
+            {"score": 69, "expected_band": "一般", "expected_advice": "有机会，建议挑时段"},
+            {"score": 70, "expected_band": "良好", "expected_advice": "适合出钓"},
+            {"score": 84, "expected_band": "良好", "expected_advice": "适合出钓"},
+            {"score": 85, "expected_band": "极佳", "expected_advice": "强烈建议出钓"},
+            {"score": 100, "expected_band": "极佳", "expected_advice": "强烈建议出钓"}
+          ],
+          "assertions": [
+            "每个 case 的 band 与 advice 均与期望完全一致",
+            "0 与 100 不抛异常"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "unit",
+          "instruction": "按契约 v1.1 验证 F3/F4/F6 补全口径；优先调用 compute_fish_activity 纯函数，或调用等价的因子函数。",
+          "command_hint": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q -k \"f3 or f4 or f6 or rule\"",
+          "cases": [
+            {"case": "F3 区间", "input": "日均温 20℃、abs(Δ24h)=7℃", "expected": "F3=6"},
+            {"case": "F3 日均温修正", "input": "日均温 30℃、abs(Δ24h)=1℃", "expected": "F3=12（15−3）"},
+            {"case": "F3 双修正下限", "input": "日均温 30℃、abs(Δ24h)=9℃、昼夜温差 13℃", "expected": "F3=0（3−3−3，下限 0）"},
+            {"case": "F4 5级", "input": "wind_speed_ms=8.0", "expected": "F4=3"},
+            {"case": "F4 6级", "input": "wind_speed_ms=10.8", "expected": "F4=0"},
+            {"case": "F6 冬季窗口", "input": "日均温 4℃、处于日出窗口", "expected": "F6=10（窗口优先）"},
+            {"case": "F6 冬季非窗口", "input": "日均温 4℃、非窗口", "expected": "F6=2"}
+          ],
+          "assertions": [
+            "每个 case 的实际因子分与期望完全一致",
+            "任一因子得分不低于 0、不超过上限",
+            "不抛异常"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "unit",
+          "instruction": "按契约 v1.2 验证 F2 兜底分档与 F5 降水口径，重点覆盖区间端点、优先级与强制劝退；调用 compute_fish_activity 的等价因子函数。",
+          "command_hint": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q -k \"f2 or f5 or rule or boundary\"",
+          "cases": [
+            {"case": "F2 内层下限", "input": "无 30 天分布、1005hPa", "expected": "F2=20"},
+            {"case": "F2 内层上限", "input": "无 30 天分布、1020hPa", "expected": "F2=20"},
+            {"case": "F2 外层下限", "input": "无 30 天分布、1000hPa", "expected": "F2=12"},
+            {"case": "F2 外层上限", "input": "无 30 天分布、1025hPa", "expected": "F2=12"},
+            {"case": "F2 异常低", "input": "无 30 天分布、999hPa", "expected": "F2=6"},
+            {"case": "F2 异常高", "input": "无 30 天分布、1026hPa", "expected": "F2=6"},
+            {"case": "F5 暴雨端点", "input": "日降水 50mm", "expected": "F5=0 且强制劝退"},
+            {"case": "F5 大雨端点", "input": "日降水 25mm", "expected": "F5=3"},
+            {"case": "F5 中雨端点", "input": "日降水 5mm", "expected": "F5=7"},
+            {"case": "F5 小雨下限", "input": "日降水 0.1mm", "expected": "F5=10"},
+            {"case": "F5 无雨", "input": "晴/阴、无雨", "expected": "F5=8"},
+            {"case": "F5 雨后", "input": "雨停 0–6h", "expected": "F5=7"},
+            {"case": "F5 晴热优先", "input": "连续晴热 >3 天", "expected": "F5=5（优先于无雨）"}
+          ],
+          "assertions": [
+            "每个 case 的实际因子分与期望完全一致",
+            "F2 内层区间优先于外层，端点为闭区间：1005/1020→20，1000/1025→12",
+            "F5 端点按左闭右开：5mm 记中雨、25mm 记大雨、50mm 记暴雨",
+            "F5 优先级：雷雨/暴雨 > 大雨 > 中雨 > 小雨 > 雨后 0–6h > 连续晴热 >3 天 > 无雨",
+            "F5=0 时 band=劝退 且 alerts 含 RAINSTORM"
+          ]
+        },
+        {
+          "step": 4,
+          "action": "unit",
+          "instruction": "构造 downwind=true 与 downwind=false 的同条件钓位，验证 v1.1 的下风口修正仅作用于钓位级 fish_score。",
+          "assertions": [
+            "downwind=true 的 fish_score 中 F4 部分比对照高 3，且不超过 15",
+            "同一时空条件下 /api/fish-activity 的通用 F4 不因 downwind 改变",
+            "钓位 total_score 仍在 0–100"
+          ]
+        }
+      ],
+      "pass_criteria": "10 个边界点全部正确，v1.1/v1.2 规则补全用例全部正确",
+      "on_fail": "P0：分档映射或规则口径错误会直接导致产品结论错误；F5 端点归属差异记 P1"
+    },
+    {
+      "order": 8,
+      "id": "DEMO-FA-07",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "因子一致性、Top3、确定性与鱼种参数",
+      "requirement_refs": ["AT-FA-06", "FR-FA-04", "FR-FA-07"],
+      "preconditions": ["Seed SEED-EXCELLENT"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "instruction": "连续请求同一 URL 3 次，保存响应 A/B/C。",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-11T21%3A30%3A00Z",
+            "curl": "for i in 1 2 3; do curl -s \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-11T21%3A30%3A00Z\" > /tmp/fa_$i.json; done"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "去除 generated_at 后，A == B == C",
+            "every(body.top_factors, t => 0 <= t.score <= t.max_score)",
+            "body.top_factors 按 (score/max_score) 降序，比值相同按 score 降序",
+            "every(body.factors, f => f.impact == \"positive\" if f.score/f.max_score >= 0.8 else (f.impact == \"negative\" if f.score/f.max_score <= 0.5 else f.impact == \"neutral\"))"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&species=%E9%B2%AB%E9%B1%BC&scenario=excellent&at=2026-04-11T21%3A30%3A00Z",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&species=%E9%B2%AB%E9%B1%BC&scenario=excellent&at=2026-04-11T21%3A30%3A00Z\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "len(body.factors) == 7",
+            "sum(body.factors.map(f => f.score)) == body.score",
+            "len(body.suitable_species) >= 1",
+            "P1：body.suitable_species 含「鲫鱼」或在 recommendation 中提及鲫鱼"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "http",
+          "instruction": "用不带时区的 at 请求同一时刻，验证按 Asia/Shanghai 解释；与步骤 1 的 UTC 结果对比。",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-12T05%3A30%3A00",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&scenario=excellent&at=2026-04-12T05%3A30%3A00\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.band == 步骤 1 的 band",
+            "body.score == 步骤 1 的 score",
+            "body.best_windows == 步骤 1 的 best_windows",
+            "body.timezone == \"Asia/Shanghai\"",
+            "body.generated_at matches ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          ]
+        }
+      ],
+      "pass_criteria": "确定性、Top3 排序、impact 阈值、合法鱼种参数、无时区 at 解释均通过",
+      "on_fail": "确定性问题查 Mock 种子取整；Top3 问题查排序实现"
+    },
+    {
+      "order": 9,
+      "id": "DEMO-SPOT-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "钓位推荐主流程（往返/禁钓/入口回退/排序）",
+      "requirement_refs": ["AT-SPOT-01", "AT-SPOT-02", "AT-SPOT-03", "AT-SPOT-04", "FR-SPOT-01~08"],
+      "preconditions": ["服务已启动", "Mock POI 满足契约 §5"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&species=%E9%B2%AB%E9%B1%BC&radius_km=100&limit=5",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&species=%E9%B2%AB%E9%B1%BC&radius_km=100&limit=5\""
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.user_location.wgs84.lat == 30.2741 (±1e-6)",
+            "body.user_location.wgs84.lon == 120.1551 (±1e-6)",
+            "abs(body.user_location.gcj02.lat - body.user_location.wgs84.lat) + abs(body.user_location.gcj02.lon - body.user_location.wgs84.lon) > 0.0005",
+            "1 <= len(body.spots) <= 5",
+            "every(body.spots, s => len(s.id) > 0 && len(s.name) > 0 && len(s.water_type) > 0 && len(s.address) > 0)",
+            "every(body.spots, s => s.location_gcj02.lat != 0 && s.location_gcj02.lon != 0)",
+            "every(body.spots, s => s.drive_seconds_round_trip == s.drive_seconds_out + s.drive_seconds_back)",
+            "every(body.spots, s => s.drive_seconds_out > 0 && s.drive_seconds_back > 0)",
+            "every(body.spots, s => s.drive_seconds_round_trip <= 7200)",
+            "every(body.spots, s => s.drive_minutes_one_way == Math.floor(s.drive_seconds_out / 60 + 0.5))",
+            "every(body.spots, s => s.entry_precision == \"entr_location\" || s.entry_precision == \"center_fallback\")",
+            "every(body.spots, s => s.entry_precision != \"center_fallback\" || (s.entry_location_gcj02.lat == s.location_gcj02.lat && s.entry_location_gcj02.lon == s.location_gcj02.lon))",
+            "body.spots.some(s => s.entry_precision == \"center_fallback\")",
+            "body.spots.some(s => s.entry_precision == \"entr_location\")",
+            "every(body.spots, s => !/一级保护区|饮用水源|禁钓|养殖场|承包塘/.test(s.name))",
+            "body.filtered.forbidden >= 1",
+            "body.filtered.over_two_hours >= 2",
+            "body.filtered.total_candidates >= 8",
+            "body.filtered.total_candidates == body.filtered.forbidden + body.filtered.over_two_hours + body.filtered.eligible",
+            "body.filtered.eligible == body.filtered.returned + body.filtered.truncated_by_limit",
+            "body.filtered.returned == len(body.spots)",
+            "every(Object.values(body.filtered), v => Number.isInteger(v) && v >= 0)",
+            "排序：every(adjacent pair a,b => a.total_score > b.total_score || (a.total_score == b.total_score && a.drive_seconds_round_trip <= b.drive_seconds_round_trip))",
+            "every(body.spots, s => 0 <= s.total_score <= 100)",
+            "every(body.spots, s => 0 <= s.fish_score <= 100)",
+            "every(body.spots, s => s.distance_m > 0)",
+            "every(body.spots, s => 2 <= len(s.reasons) <= 4)",
+            "every(body.spots, s => s.reasons.some(r => /分钟|小时|往返|车程/.test(r)))",
+            "every(body.spots, s => s.reasons.some(r => /鱼|水库|湖泊|河流|塘|鲫|鲤|草|鲢/.test(r)))",
+            "every(body.spots, s => s.navigation_url.startsWith(\"https://uri.amap.com/marker?position=\"))",
+            "every(body.spots, s => s.navigation_url.includes(\"name=\"))",
+            "body.meta.mock_mode == true",
+            "body.meta.radius_km == 100",
+            "body.meta.round_trip_limit_seconds == 7200",
+            "body.meta.traffic_basis == \"baseline_estimate\"",
+            "body.meta.generated_at matches ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过；红线（往返、禁钓、入口回退）任一条失败即 P0",
+      "on_fail": "往返问题查 FR-SPOT-04；禁钓查 FR-SPOT-05；入口回退查 Mock 是否让回退候选通过过滤；排序查 FR-SPOT-06"
+    },
+    {
+      "order": 10,
+      "id": "DEMO-SPOT-02",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "钓位参数边界与非法输入",
+      "requirement_refs": ["AT-SPOT-05", "AT-SPOT-06", "AT-ERR-01~03"],
+      "preconditions": ["服务已启动"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=150&limit=5",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=150&limit=5\""
+          },
+          "expected_status": 200,
+          "assertions": ["body.meta.radius_km == 150", "0 <= len(body.spots) <= 5"]
+        },
+        {
+          "step": 2,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=150.1",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=150.1\""
+          },
+          "expected_status": 422,
+          "assertions": [
+            "body.detail.code == \"VALIDATION_ERROR\"",
+            "响应为参数校验错误，不是 500"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=0",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=0\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 4,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=-1",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=-1\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 5,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=1",
+            "curl": "curl -s \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=1\""
+          },
+          "expected_status": 200,
+          "assertions": ["len(body.spots) <= 1"]
+        },
+        {
+          "step": 6,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=10",
+            "curl": "curl -s \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=10\""
+          },
+          "expected_status": 200,
+          "assertions": ["len(body.spots) <= 10"]
+        },
+        {
+          "step": 7,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=0",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=0\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 8,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=11",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&limit=11\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 9,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=91&lon=120.1551",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=91&lon=120.1551\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 10,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=181",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=181\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 11,
+          "action": "http",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741",
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 12,
+          "action": "http",
+          "instruction": "v1.1 已裁决：非法 species 返回 422 INVALID_SPECIES，不允许宽松降级。",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&species=%E9%BB%91%E9%B1%BC",
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" \"http://127.0.0.1:8000/api/fish-activity?lat=30.2741&lon=120.1551&species=%E9%BB%91%E9%B1%BC\""
+          },
+          "expected_status": 422,
+          "assertions": [
+            "body.detail.code == \"INVALID_SPECIES\"",
+            "body.detail.message 可读，最好列出支持鱼种",
+            "不是 500，也不是 200 通用分"
+          ]
+        }
+      ],
+      "pass_criteria": "P0 步骤全部符合期望状态；所有 422 均满足 detail.code（VALIDATION_ERROR 或 INVALID_SPECIES）",
+      "on_fail": "422 变成 500 或 200 为 P0；错误信息不可读为 P1"
+    },
+    {
+      "order": 11,
+      "id": "DEMO-SPOT-03",
+      "priority": "P0",
+      "blocking": true,
+      "type": "unit",
+      "title": "radius ≤ 50000 硬校验与分片去重",
+      "requirement_refs": ["AT-SPOT-05", "FR-SPOT-02", "R2"],
+      "preconditions": ["可注入/伪造 POI Provider"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "unit",
+          "instruction": "用 Fake Provider 记录每次周边搜索的 radius 参数，调用推荐服务并传入 radius_km=150；断言没有任何调用 >50000m，且调用次数 >=2（>50km 必须分片），结果按 id 去重。",
+          "command_hint": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q -k \"radius or shard\"",
+          "assertions": [
+            "every(provider_calls, c => c.radius <= 50000)",
+            "len(provider_calls) >= 2（radius_km=150 时必须分片）",
+            "len(unique_spot_ids) == len(spot_ids)（去重生效）",
+            "直接以 radius=50001 调用 Provider/服务时抛错且不发出请求",
+            "radius_km=50 时不因分片产生重复结果"
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过；任一条失败为 P0（静默降级风险）",
+      "on_fail": "P0：检查 B-05 的硬校验位置（进入 Provider 前）与分片去重"
+    },
+    {
+      "order": 12,
+      "id": "DEMO-SPOT-04",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "钓位推荐确定性",
+      "requirement_refs": ["AT-SPOT-08", "FR-SPOT-07", "§5.3"],
+      "preconditions": ["Mock 模式"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "instruction": "60 秒内连续请求同一钓位 URL 2 次，比较 spots 数组、filtered、meta（排除 generated_at）。",
+          "request": {
+            "method": "GET",
+            "url": "http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=100&limit=5",
+            "curl": "curl -s \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=100&limit=5\" > /tmp/spots_a.json; sleep 2; curl -s \"http://127.0.0.1:8000/api/spots/recommend?lat=30.2741&lon=120.1551&radius_km=100&limit=5\" > /tmp/spots_b.json"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "去除 meta.generated_at 后，A.spots == B.spots",
+            "A.filtered == B.filtered",
+            "A.meta.mock_mode == B.meta.mock_mode == true",
+            "A.meta.radius_km == B.meta.radius_km == 100"
+          ]
+        }
+      ],
+      "pass_criteria": "两次结果一致；若因按秒种子导致漂移，记 P1 并要求按小时取整",
+      "on_fail": "P1：建议 Mock 天气种子按小时取整；若 id/排序漂移则 P0"
+    },
+    {
+      "order": 13,
+      "id": "DEMO-CHAT-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "问句一：今天这气压适合钓鱼吗？",
+      "requirement_refs": ["AT-CHAT-01", "FR-CHAT-02"],
+      "preconditions": ["LLM_API_KEY 为空", "Mock 模式"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "今天这气压适合钓鱼吗？",
+              "location": {"lat": 30.2741, "lon": 120.1551, "name": "杭州西湖"},
+              "session_id": "demo-chat-1",
+              "history": []
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"今天这气压适合钓鱼吗？\",\"location\":{\"lat\":30.2741,\"lon\":120.1551,\"name\":\"杭州西湖\"},\"session_id\":\"demo-chat-1\",\"history\":[]}'"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.session_id == \"demo-chat-1\"",
+            "body.mode == \"fallback\"",
+            "len(body.tool_calls) >= 1",
+            "body.tool_calls.some(t => t.name == \"get_fish_activity\" && t.status == \"ok\")",
+            "every(body.tool_calls, t => t.status == \"ok\" || t.status == \"error\")",
+            "body.fish_activity != null",
+            "body.fish_activity.score == body.fish_activity.factors.reduce((s,f) => s+f.score, 0)",
+            "len(body.fish_activity.factors) == 7",
+            "body.fish_activity.timezone == \"Asia/Shanghai\"",
+            "len(body.reply) >= 20",
+            "body.reply contains_any [\"极佳\",\"良好\",\"一般\",\"偏差\",\"劝退\",\"不建议出钓\"]",
+            "body.reply contains_any [\"气压\",\"鱼口\",\"鱼情\"]",
+            "body.reply contains_any [\"窗口\",\"时段\",\"建议\"]",
+            "body.reply matches \\d{1,2}:\\d{2} 或包含「窗口」",
+            "body.reply 不含「必上鱼」「保证爆护」「百分百」「绝不空军」",
+            "body.ai_disclosure == \"本内容由 AI 生成，仅供参考，不承诺渔获。\""
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "工具未调用查 A-01；fallback 意图错误 P0；回复过长/播报天气 P2"
+    },
+    {
+      "order": 14,
+      "id": "DEMO-CHAT-02",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "问句二：附近哪里野钓好？",
+      "requirement_refs": ["AT-CHAT-02", "FR-CHAT-02"],
+      "preconditions": ["LLM_API_KEY 为空", "Mock 模式"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "附近哪里野钓好？",
+              "location": {"lat": 30.2741, "lon": 120.1551, "name": "杭州西湖"},
+              "session_id": "demo-chat-2",
+              "history": []
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"附近哪里野钓好？\",\"location\":{\"lat\":30.2741,\"lon\":120.1551,\"name\":\"杭州西湖\"},\"session_id\":\"demo-chat-2\",\"history\":[]}'"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.mode == \"fallback\"",
+            "body.tool_calls.some(t => t.name == \"recommend_spots\" && t.status == \"ok\")",
+            "body.spots != null",
+            "len(body.spots.spots) >= 1",
+            "every(body.spots.spots, s => s.drive_seconds_round_trip <= 7200)",
+            "body.spots.filtered.total_candidates == body.spots.filtered.forbidden + body.spots.filtered.over_two_hours + body.spots.filtered.eligible",
+            "body.spots.filtered.eligible == body.spots.filtered.returned + body.spots.filtered.truncated_by_limit",
+            "body.spots.filtered.returned == len(body.spots.spots)",
+            "body.spots.meta.generated_at matches ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+            "body.reply contains 至少 1 个 body.spots.spots[].name",
+            "body.reply contains_any [\"分钟\",\"小时\",\"往返\"]",
+            "body.reply contains_any [\"预估\",\"约\"]",
+            "body.reply contains_any [\"推荐\",\"适合\",\"可以考虑\"]",
+            "body.reply 不含「保证合法」「保证有鱼」「必上鱼」",
+            "body.ai_disclosure == \"本内容由 AI 生成，仅供参考，不承诺渔获。\""
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "钓位工具未调用查 A-01；回复未引用实际钓位名 P1；编造钓位名 P0"
+    },
+    {
+      "order": 15,
+      "id": "DEMO-CHAT-03",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "问句三：明早几点去最好？",
+      "requirement_refs": ["AT-CHAT-03", "FR-CHAT-02"],
+      "preconditions": ["LLM_API_KEY 为空", "Mock 模式"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "明早几点去最好？",
+              "location": {"lat": 30.2741, "lon": 120.1551, "name": "杭州西湖"},
+              "session_id": "demo-chat-3",
+              "history": []
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"明早几点去最好？\",\"location\":{\"lat\":30.2741,\"lon\":120.1551,\"name\":\"杭州西湖\"},\"session_id\":\"demo-chat-3\",\"history\":[]}'"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.mode == \"fallback\"",
+            "body.tool_calls.some(t => t.name == \"get_fish_activity\" && t.status == \"ok\")",
+            "body.fish_activity != null",
+            "body.fish_activity.timezone == \"Asia/Shanghai\"",
+            "body.reply matches \\d{1,2}:\\d{2}",
+            "body.reply contains_any [\"建议\",\"窗口\",\"最好\",\"优先\"]",
+            "body.reply contains_any [\"气压\",\"鱼口\",\"鱼情\",\"天气条件\"]",
+            "body.reply 不含「必上鱼」「保证爆护」",
+            "body.ai_disclosure == \"本内容由 AI 生成，仅供参考，不承诺渔获。\""
+          ]
+        }
+      ],
+      "pass_criteria": "全部断言通过",
+      "on_fail": "未给出具体时段 P0；未调用鱼情工具 P0；只回「看天气」P0"
+    },
+    {
+      "order": 16,
+      "id": "DEMO-CHAT-04",
+      "priority": "P0",
+      "blocking": true,
+      "type": "api",
+      "title": "对话异常、兜底与历史长度",
+      "requirement_refs": ["AT-ERR-06~09", "AT-ERR-12~13", "FR-CHAT-03~04"],
+      "preconditions": ["服务已启动"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "今天适合钓鱼吗？",
+              "session_id": "demo-chat-err-1"
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"今天适合钓鱼吗？\",\"session_id\":\"demo-chat-err-1\"}'"
+          },
+          "expected_status": 422,
+          "assertions": [
+            "body.detail.code == \"VALIDATION_ERROR\"",
+            "响应文本含 \"location\" 或 \"定位\"",
+            "不是 500"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "",
+              "location": {"lat": 30.2741, "lon": 120.1551},
+              "session_id": "demo-chat-err-2"
+            },
+            "curl": "curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"\",\"location\":{\"lat\":30.2741,\"lon\":120.1551},\"session_id\":\"demo-chat-err-2\"}'"
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 3,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body_template": {
+              "message": "<501 个字符>",
+              "location": {"lat": 30.2741, "lon": 120.1551},
+              "session_id": "demo-chat-err-3"
+            },
+            "body_generation": {"message": {"repeat": "a", "count": 501}},
+            "curl": "MSG=$(/c/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe -c \"print('a'*501)\"); curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d \"{\\\"message\\\":\\\"$MSG\\\",\\\"location\\\":{\\\"lat\\\":30.2741,\\\"lon\\\":120.1551},\\\"session_id\\\":\\\"demo-chat-err-3\\\"}\""
+          },
+          "expected_status": 422
+        },
+        {
+          "step": 4,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "帮我写首诗",
+              "location": {"lat": 30.2741, "lon": 120.1551, "name": "杭州西湖"},
+              "session_id": "demo-chat-err-4",
+              "history": []
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"帮我写首诗\",\"location\":{\"lat\":30.2741,\"lon\":120.1551,\"name\":\"杭州西湖\"},\"session_id\":\"demo-chat-err-4\",\"history\":[]}'"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "len(body.reply) > 0",
+            "body.reply 引导至鱼情/钓位/时段三类问题",
+            "不是 500，不编造鱼情结论"
+          ]
+        },
+        {
+          "step": 5,
+          "action": "http",
+          "request": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/api/agent/chat",
+            "body": {
+              "message": "今天这气压适合钓鱼吗？",
+              "location": {"lat": 30.2741, "lon": 120.1551, "name": "杭州西湖"},
+              "session_id": "demo-chat-history",
+              "history": [
+                {"role": "user", "content": "问题1"},
+                {"role": "assistant", "content": "回答1"},
+                {"role": "user", "content": "问题2"},
+                {"role": "assistant", "content": "回答2"},
+                {"role": "user", "content": "问题3"},
+                {"role": "assistant", "content": "回答3"},
+                {"role": "user", "content": "问题4"},
+                {"role": "assistant", "content": "回答4"},
+                {"role": "user", "content": "问题5"},
+                {"role": "assistant", "content": "回答5"},
+                {"role": "user", "content": "问题6"},
+                {"role": "assistant", "content": "回答6"}
+              ]
+            },
+            "curl": "curl -s -w \"\\nHTTP:%{http_code}\\n\" -X POST \"http://127.0.0.1:8000/api/agent/chat\" -H \"Content-Type: application/json\" -d '{\"message\":\"今天这气压适合钓鱼吗？\",\"location\":{\"lat\":30.2741,\"lon\":120.1551,\"name\":\"杭州西湖\"},\"session_id\":\"demo-chat-history\",\"history\":[{\"role\":\"user\",\"content\":\"问题1\"},{\"role\":\"assistant\",\"content\":\"回答1\"},{\"role\":\"user\",\"content\":\"问题2\"},{\"role\":\"assistant\",\"content\":\"回答2\"},{\"role\":\"user\",\"content\":\"问题3\"},{\"role\":\"assistant\",\"content\":\"回答3\"},{\"role\":\"user\",\"content\":\"问题4\"},{\"role\":\"assistant\",\"content\":\"回答4\"},{\"role\":\"user\",\"content\":\"问题5\"},{\"role\":\"assistant\",\"content\":\"回答5\"},{\"role\":\"user\",\"content\":\"问题6\"},{\"role\":\"assistant\",\"content\":\"回答6\"}]}'"
+          },
+          "expected_status": 200,
+          "assertions": [
+            "body.session_id == \"demo-chat-history\"",
+            "len(body.reply) > 0",
+            "不是 500"
+          ]
+        },
+        {
+          "step": 6,
+          "action": "unit",
+          "instruction": "将鱼情工具 monkeypatch 为抛异常，调用 /api/agent/chat 处理对应逻辑；断言不抛 500，tool_calls[].status=error，reply 可读。",
+          "assertions": [
+            "HTTP 200",
+            "tool_calls 中失败工具 status == \"error\"",
+            "reply 含「暂时无法获取」或「稍后重试」等可读兜底",
+            "无堆栈信息返回给用户"
+          ]
+        },
+        {
+          "step": 7,
+          "action": "unit",
+          "instruction": "配置一个无效 LLM Key 或 mock LLM 抛超时，调用 chat；断言 mode=fallback 且三类意图仍可用。",
+          "assertions": [
+            "mode == \"fallback\"",
+            "三类问句至少各 1 条仍返回 200 且工具调用正确",
+            "响应无 500"
+          ]
+        }
+      ],
+      "pass_criteria": "P0 步骤全部通过",
+      "on_fail": "422 未命中查请求模型；500 为 P0；兜底不可读 P1"
+    },
+    {
+      "order": 17,
+      "id": "DEMO-UI-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "ui",
+      "title": "H5 主流程：位置 → 评分卡 → 钓位 → 对话",
+      "requirement_refs": ["AT-UI-01", "AT-UI-03", "AT-UI-04", "FR-UI-01~04"],
+      "preconditions": ["服务已启动", "浏览器可用"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "ui",
+          "instruction": "打开 http://127.0.0.1:8000/",
+          "expect": [
+            "页面标题/品牌名为 FishAgent",
+            "可见「获取定位」按钮与手动经纬度输入框",
+            "可见「开始分析」按钮",
+            "可见 3 个示例问题快捷按钮",
+            "可见「AI 生成 · 仅供参考」",
+            "可见「Mock 演示模式 · 天气与钓位为模拟数据」",
+            "可见免责声明或可一屏内展开的免责入口"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "ui",
+          "instruction": "手动输入 lat=30.2741、lon=120.1551，点击「开始分析」",
+          "expect": [
+            "加载态出现并结束，无报错",
+            "评分卡显示 0–100 的分数与五档之一",
+            "显示 advice 与至少 1 条 recommendation",
+            "显示 Top3 因子及其 impact 标识（加分/中性/减分）",
+            "显示最佳时段（按 Asia/Shanghai 展示）、水深策略、适宜鱼种",
+            "如存在 alerts，按 danger/warning/info 区分并逐条可读",
+            "评分依据数据条存在，标题为「评分依据（非天气预报）」，仅展示当前因子数据，数据源与生成时间可见",
+            "无多时段预报或天气播报式面板"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "ui",
+          "instruction": "滚动到钓位列表",
+          "expect": [
+            "至少 1 个钓位卡片",
+            "每张卡片含名称、水域类型、单程与往返时间（带「预估」）、推荐理由、导航链接",
+            "至少 1 张卡片显示「端点精度较低」（若该候选在结果中）",
+            "导航链接可点击且新窗口打开",
+            "如后端返回 filtered 摘要，页面显示已过滤禁钓/超时数量且与 returned/eligible 自洽（P1）"
+          ]
+        },
+        {
+          "step": 4,
+          "action": "ui",
+          "instruction": "依次点击 3 个示例问题并等待回复",
+          "expect": [
+            "「今天这气压适合钓鱼吗？」回复含档位/建议与理由",
+            "「附近哪里野钓好？」回复含至少 1 个钓位名与往返耗时",
+            "「明早几点去最好？」回复含具体 HH:MM 时段",
+            "对话区显示 AI 标识；fallback 时显示「当前为规则兜底回答」（P1）",
+            "无 500/报错气泡"
+          ]
+        },
+        {
+          "step": 5,
+          "action": "ui",
+          "instruction": "开发者工具切换到 375px 宽（如 iPhone SE）",
+          "expect": [
+            "无横向滚动",
+            "输入框、按钮、快捷问题可点击",
+            "评分卡与钓位卡片不溢出"
+          ]
+        },
+        {
+          "step": 6,
+          "action": "ui",
+          "instruction": "将经度改为 181 后点击「开始分析」",
+          "expect": [
+            "出现可读的参数错误提示（如「经度需在 -180~180」）",
+            "页面不白屏、不崩溃"
+          ]
+        }
+      ],
+      "pass_criteria": "6 步全部通过",
+      "on_fail": "主流程阻断为 P0；样式/摘要缺失为 P2"
+    },
+    {
+      "order": 18,
+      "id": "DEMO-UI-02",
+      "priority": "P0",
+      "blocking": true,
+      "type": "ui",
+      "title": "合规文案、无 Key 与位置隐私",
+      "requirement_refs": ["AT-UI-02", "AT-UI-05", "AT-UI-06", "AT-CMP-01~03"],
+      "preconditions": ["已完成 DEMO-UI-01 主流程"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "ui",
+          "instruction": "检查页面可见文案",
+          "expect": [
+            "常驻「AI 生成 · 仅供参考」",
+            "结果页可见完整免责声明：「FishAgent 仅提供基于公开数据的参考性建议，不保证渔获结果。请遵守当地渔业法规与禁钓规定，自行确认垂钓合法性；注意涉水安全，恶劣天气请勿出钓，建议结伴出行。本演示仅将定位用于本次推荐，不做长期保存。」",
+            "页面无「必上鱼」「保证爆护」「百分百」「绝不空军」「稳了」",
+            "评分依据数据条标题为「评分依据（非天气预报）」，仅含当前因子数据，无多时段预报/天气播报式面板，数据源与生成时间可见",
+            "车程均带「预估」标注；回退钓位带「端点精度较低」"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "ui",
+          "instruction": "查看页面源码与 Network 面板",
+          "expect": [
+            "源码与 JS 中不含 AMAP_WEB_KEY、LLM_API_KEY、sk- 开头的 Key",
+            "所有业务请求只发往同源 /api/*",
+            "不存在前端直连 restapi.amap.com、api.open-meteo.com、api.openai.com 的请求"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "ui",
+          "instruction": "完成一次分析后，在 DevTools → Application → Local Storage / Session Storage 搜索 30.2741 与 120.1551",
+          "expect": [
+            "不出现完整经纬度（允许内存态，不允许 localStorage/sessionStorage 长期明文存储）",
+            "如存在位置缓存，必须为模糊化坐标或明确会话级且可清除；否则记 P0"
+          ]
+        },
+        {
+          "step": 4,
+          "action": "engineering",
+          "instruction": "检查仓库密钥与示例配置",
+          "expect": [
+            "git 跟踪文件中无 .env",
+            ".env.example 仅占位符，无真实 Key",
+            "web/ 目录无任何服务端 Key 或签名逻辑",
+            "日志/响应中不返回完整经纬度（抽查后端日志）"
+          ]
+        }
+      ],
+      "pass_criteria": "全部通过；发现 Key 泄露或精确定位持久化为 P0，立即阻断",
+      "on_fail": "P0 阻断交付，通知小厚/小钱修复并复测"
+    },
+    {
+      "order": 19,
+      "id": "DEMO-ENG-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "engineering",
+      "title": "自动化测试与代码质量",
+      "requirement_refs": ["DoD-6", "G5"],
+      "preconditions": ["依赖已安装"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "shell",
+          "instruction": "在仓库根目录执行后端测试",
+          "command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m pytest backend/tests -q",
+          "assertions": [
+            "退出码 == 0",
+            "无 failed / error",
+            "记录 passed 数量与耗时"
+          ]
+        },
+        {
+          "step": 2,
+          "action": "shell",
+          "instruction": "执行 Ruff",
+          "command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -m ruff check backend",
+          "assertions": [
+            "退出码 == 0",
+            "如存在明确记录的忽略项，需在 QA 报告中列出并说明理由"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "engineering",
+          "instruction": "检查 README 快速开始是否可从零复现",
+          "assertions": [
+            "安装命令使用显式 Python 3.12 路径",
+            "启动命令、测试命令、演示坐标齐全",
+            "明确标注 Mock 模式与真实 Key 未实测"
+          ]
+        }
+      ],
+      "pass_criteria": "pytest 全绿 + Ruff 通过 + README 可执行",
+      "on_fail": "P0：测试失败或 Ruff 失败不得交付；记录失败用例与负责人"
+    },
+    {
+      "order": 20,
+      "id": "DEMO-COORD-01",
+      "priority": "P0",
+      "blocking": true,
+      "type": "unit",
+      "title": "坐标转换回归",
+      "requirement_refs": ["AT-SPOT-07", "R1"],
+      "preconditions": ["fishagent 包已安装或 PYTHONPATH 指向 backend"],
+      "steps": [
+        {
+          "step": 1,
+          "action": "shell",
+          "instruction": "执行坐标转换断言（已知点 + 往返 + 杭州偏移）",
+          "command": "\"C:/Users/koubinbin/AppData/Local/Programs/Python/Python312/python.exe\" -c \"from fishagent.core.coords import wgs84_to_gcj02, gcj02_to_wgs84; a=wgs84_to_gcj02(39.915,116.404); assert abs(a[0]-39.916404)<=1e-4 and abs(a[1]-116.410244)<=1e-4, a; b=gcj02_to_wgs84(*a); assert abs(b[0]-39.915)<=1e-5 and abs(b[1]-116.404)<=1e-5, b; h=wgs84_to_gcj02(30.2741,120.1551); assert abs(h[0]-30.2756)<=1e-3 and abs(h[1]-120.1598)<=1e-3, h; print('PASS', a, h)\"",
+          "assertions": [
+            "输出 PASS",
+            "北京已知点误差 ≤1e-4°",
+            "往返误差 ≤1e-5°",
+            "杭州示例点与契约 §4.3 示例偏差 ≤1e-3°"
+          ]
+        }
+      ],
+      "pass_criteria": "输出 PASS",
+      "on_fail": "P0：坐标错误会导致钓位偏移/对岸；检查唯一入口与调用方向"
+    }
+  ]
+}

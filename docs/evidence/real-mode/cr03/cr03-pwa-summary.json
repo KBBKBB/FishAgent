@@ -1,0 +1,498 @@
+{
+  "base_url": "http://127.0.0.1:8033",
+  "total": 47,
+  "passed": 47,
+  "failed": 0,
+  "failures": [],
+  "results": [
+    {
+      "id": "A01-icons-real-dimensions",
+      "ok": true,
+      "detail": {
+        "icon-192.png": {
+          "status": 200,
+          "type": "image/png",
+          "size": [
+            192,
+            192
+          ],
+          "bytes": 2141
+        },
+        "icon-512.png": {
+          "status": 200,
+          "type": "image/png",
+          "size": [
+            512,
+            512
+          ],
+          "bytes": 6316
+        },
+        "icon-maskable-192.png": {
+          "status": 200,
+          "type": "image/png",
+          "size": [
+            192,
+            192
+          ],
+          "bytes": 1149
+        },
+        "icon-maskable-512.png": {
+          "status": 200,
+          "type": "image/png",
+          "size": [
+            512,
+            512
+          ],
+          "bytes": 3974
+        },
+        "apple-touch-icon-180.png": {
+          "status": 200,
+          "type": "image/png",
+          "size": [
+            180,
+            180
+          ],
+          "bytes": 1084
+        }
+      }
+    },
+    {
+      "id": "A02-manifest-mime",
+      "ok": true,
+      "detail": "application/manifest+json"
+    },
+    {
+      "id": "A03-manifest-fields",
+      "ok": true,
+      "detail": "all match"
+    },
+    {
+      "id": "A04-manifest-icons",
+      "ok": true,
+      "detail": [
+        [
+          "192x192",
+          "any",
+          "image/png"
+        ],
+        [
+          "512x512",
+          "any",
+          "image/png"
+        ],
+        [
+          "192x192",
+          "maskable",
+          "image/png"
+        ],
+        [
+          "512x512",
+          "maskable",
+          "image/png"
+        ]
+      ]
+    },
+    {
+      "id": "A05-manifest-display-override",
+      "ok": true,
+      "detail": [
+        "standalone",
+        "minimal-ui"
+      ]
+    },
+    {
+      "id": "A06-index-served",
+      "ok": true,
+      "detail": "text/html; charset=utf-8"
+    },
+    {
+      "id": "A07-ios-meta",
+      "ok": true,
+      "detail": "all present"
+    },
+    {
+      "id": "A08-icon-and-manifest-links",
+      "ok": true,
+      "detail": "all present"
+    },
+    {
+      "id": "A09-forbidden-notice-exact",
+      "ok": true,
+      "detail": "exact text present"
+    },
+    {
+      "id": "A10-disclosure-present",
+      "ok": true,
+      "detail": "ai badge + disclaimer present"
+    },
+    {
+      "id": "A11-sw-source",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "type": "application/javascript",
+        "bytes": 3878
+      }
+    },
+    {
+      "id": "A15-chrome-installability",
+      "ok": true,
+      "detail": {
+        "manifestUrl": "http://127.0.0.1:8033/manifest.webmanifest",
+        "manifestErrors": [],
+        "installabilityErrors": []
+      }
+    },
+    {
+      "id": "A12-sw-registration-takeover",
+      "ok": true,
+      "detail": {
+        "supported": true,
+        "secure": true,
+        "scope": "http://127.0.0.1:8033/",
+        "active": "http://127.0.0.1:8033/sw.js",
+        "controller": "http://127.0.0.1:8033/sw.js",
+        "state": "activated"
+      }
+    },
+    {
+      "id": "A13-shell-precache",
+      "ok": true,
+      "detail": {
+        "names": [
+          "fishagent-v1-static"
+        ],
+        "missing": [],
+        "count": 10
+      }
+    },
+    {
+      "id": "A14-api-not-cached",
+      "ok": true,
+      "detail": "no /api entries"
+    },
+    {
+      "id": "A16-android-install-entry",
+      "ok": true,
+      "detail": {
+        "defaultHidden": true,
+        "afterPromptHidden": false
+      }
+    },
+    {
+      "id": "A18-api-never-cached-after-traffic",
+      "ok": true,
+      "detail": {
+        "names": [
+          "fishagent-v1-static"
+        ],
+        "api": []
+      }
+    },
+    {
+      "id": "A19-desktop-1280-no-overflow",
+      "ok": true,
+      "detail": {
+        "scrollWidth": 1280,
+        "clientWidth": 1280,
+        "bodyScrollWidth": 1280,
+        "innerWidth": 1280
+      }
+    },
+    {
+      "id": "A20-offline-api-503-honest",
+      "ok": true,
+      "detail": {
+        "status": 503,
+        "body": {
+          "detail": "当前处于离线状态，无法获取实时数据；请恢复网络后重试。"
+        }
+      }
+    },
+    {
+      "id": "A21-offline-shell-no-fake-data",
+      "ok": true,
+      "detail": {
+        "online": false,
+        "bannerHidden": false,
+        "bannerText": "当前处于离线状态，鱼情与钓位数据暂不可用；恢复网络后将自动重试。",
+        "spotCards": 0,
+        "spotText": "钓位推荐暂时不可用当前处于离线状态，无法获取实时数据；请恢复网络后重试。",
+        "activityText": "鱼情分析暂时不可用当前处于离线状态，无法获取实时数据；请恢复网络后重试。",
+        "controlled": true,
+        "hasMockSpotNames": false
+      }
+    },
+    {
+      "id": "A22-network-recovery",
+      "ok": true,
+      "detail": {
+        "online": true,
+        "bannerHidden": true,
+        "spotCards": 4,
+        "status": "网络已恢复，正在重新获取鱼情与钓位。"
+      }
+    },
+    {
+      "id": "A23-version-cleanup",
+      "ok": true,
+      "detail": {
+        "names": [
+          "fishagent-v1-static"
+        ],
+        "legacyPresent": false,
+        "controller": true
+      }
+    },
+    {
+      "id": "A21b-offline-banner-truthful",
+      "ok": true,
+      "detail": {
+        "online": false,
+        "hidden": false,
+        "text": "当前处于离线状态，鱼情与钓位数据暂不可用；恢复网络后将自动重试。",
+        "spotCards": 0
+      }
+    },
+    {
+      "id": "A24-desktop-console-clean",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "A24b-offline-console-expected-503",
+      "ok": true,
+      "detail": [
+        "Failed to load resource: the server responded with a status of 503 ()"
+      ]
+    },
+    {
+      "id": "A17-standalone-hides-install",
+      "ok": true,
+      "detail": {
+        "mq": true,
+        "standalone": true,
+        "installHidden": true,
+        "hintHidden": true
+      }
+    },
+    {
+      "id": "A30-ios-standalone-hides-guidance",
+      "ok": true,
+      "detail": {
+        "mq": true,
+        "standalone": true,
+        "hintHidden": true,
+        "installHidden": true
+      }
+    },
+    {
+      "id": "A25-iphone-ios-guidance",
+      "ok": true,
+      "detail": {
+        "hidden": false,
+        "text": "安装到主屏幕：在 Safari 中点击“分享” → “添加到主屏幕”，即可像 App 一样打开 FishAgent。 ×",
+        "installHidden": true
+      }
+    },
+    {
+      "id": "A26-iphone-cards-five",
+      "ok": true,
+      "detail": [
+        "青山水库",
+        "镜湖湿地野塘",
+        "苕溪河湾",
+        "白鹭湖",
+        "九龙湖"
+      ]
+    },
+    {
+      "id": "A27-iphone-amap-app-scheme",
+      "ok": true,
+      "detail": [
+        "iosamap://path?sourceApplication=FishAgent&dlat=30.349000&dlon=120.021000&dname=%E9%9D%92%E5%B1%B1%E6%B0%B4%E5%BA%93&dev=0&t=0",
+        "iosamap://path?sourceApplication=FishAgent&dlat=30.309000&dlon=120.121000&dname=%E9%95%9C%E6%B9%96%E6%B9%BF%E5%9C%B0%E9%87%8E%E5%A1%98&dev=0&t=0",
+        "iosamap://path?sourceApplication=FishAgent&dlat=30.329000&dlon=120.051000&dname=%E8%8B%95%E6%BA%AA%E6%B2%B3%E6%B9%BE&dev=0&t=0",
+        "iosamap://path?sourceApplication=FishAgent&dlat=30.220000&dlon=119.980000&dname=%E7%99%BD%E9%B9%AD%E6%B9%96&dev=0&t=0",
+        "iosamap://path?sourceApplication=FishAgent&dlat=30.139000&dlon=120.221000&dname=%E4%B9%9D%E9%BE%99%E6%B9%96&dev=0&t=0"
+      ]
+    },
+    {
+      "id": "A28-iphone-fallback-web",
+      "ok": true,
+      "detail": [
+        "https://uri.amap.com/marker?position=120.021,30.349&name=%E9%9D%92%E5%B1%B1%E6%B0%B4%E5%BA%93",
+        "https://uri.amap.com/marker?position=120.121,30.309&name=%E9%95%9C%E6%B9%96%E6%B9%BF%E5%9C%B0%E9%87%8E%E5%A1%98",
+        "https://uri.amap.com/marker?position=120.051,30.329&name=%E8%8B%95%E6%BA%AA%E6%B2%B3%E6%B9%BE",
+        "https://uri.amap.com/marker?position=119.98,30.22&name=%E7%99%BD%E9%B9%AD%E6%B9%96",
+        "https://uri.amap.com/marker?position=120.221,30.139&name=%E4%B9%9D%E9%BE%99%E6%B9%96"
+      ]
+    },
+    {
+      "id": "A29-ios-guidance-dismiss-persist",
+      "ok": true,
+      "detail": {
+        "afterClose": {
+          "hidden": true,
+          "flag": "1"
+        },
+        "afterReloadHidden": true
+      }
+    },
+    {
+      "id": "A31-iphone-375-no-overflow",
+      "ok": true,
+      "detail": {
+        "scrollWidth": 375,
+        "clientWidth": 375,
+        "bodyScrollWidth": 375,
+        "innerWidth": 375
+      }
+    },
+    {
+      "id": "A32-cr01-batch-switch-no-request",
+      "ok": true,
+      "detail": {
+        "first": [
+          "青山水库",
+          "镜湖湿地野塘",
+          "苕溪河湾",
+          "白鹭湖",
+          "九龙湖"
+        ],
+        "second": [
+          "湘湖"
+        ],
+        "third": [
+          "青山水库",
+          "镜湖湿地野塘",
+          "苕溪河湾",
+          "白鹭湖",
+          "九龙湖"
+        ],
+        "status1": "已换到下一批钓位。",
+        "status2": "已展示全部推荐，已回到第 1 批。",
+        "clickMs": 225.4,
+        "requests": 0
+      }
+    },
+    {
+      "id": "A33-iphone-console-clean",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "A34-android-amap-app-scheme",
+      "ok": true,
+      "detail": [
+        "amapuri://route/plan/?sourceApplication=FishAgent&dlat=30.349000&dlon=120.021000&dname=%E9%9D%92%E5%B1%B1%E6%B0%B4%E5%BA%93&dev=0&t=0",
+        "amapuri://route/plan/?sourceApplication=FishAgent&dlat=30.309000&dlon=120.121000&dname=%E9%95%9C%E6%B9%96%E6%B9%BF%E5%9C%B0%E9%87%8E%E5%A1%98&dev=0&t=0",
+        "amapuri://route/plan/?sourceApplication=FishAgent&dlat=30.329000&dlon=120.051000&dname=%E8%8B%95%E6%BA%AA%E6%B2%B3%E6%B9%BE&dev=0&t=0",
+        "amapuri://route/plan/?sourceApplication=FishAgent&dlat=30.220000&dlon=119.980000&dname=%E7%99%BD%E9%B9%AD%E6%B9%96&dev=0&t=0",
+        "amapuri://route/plan/?sourceApplication=FishAgent&dlat=30.139000&dlon=120.221000&dname=%E4%B9%9D%E9%BE%99%E6%B9%96&dev=0&t=0"
+      ]
+    },
+    {
+      "id": "A35-android-no-ios-guidance",
+      "ok": true,
+      "detail": true
+    },
+    {
+      "id": "A36-android-install-entry-visible",
+      "ok": true,
+      "detail": false
+    },
+    {
+      "id": "A37-android-375-no-overflow",
+      "ok": true,
+      "detail": {
+        "scrollWidth": 375,
+        "clientWidth": 375,
+        "bodyScrollWidth": 375,
+        "innerWidth": 375
+      }
+    },
+    {
+      "id": "A38-android-console-clean",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "A39-ipados-macintosh-touch",
+      "ok": true,
+      "detail": {
+        "cards": [
+          "iosamap://path?sourceApplication=FishAgent&dlat=30.349000&dlon=120.021000&dname=%E9%9D%92%E5%B1%B1%E6%B0%B4%E5%BA%93&dev=0&t=0",
+          "iosamap://path?sourceApplication=FishAgent&dlat=30.309000&dlon=120.121000&dname=%E9%95%9C%E6%B9%96%E6%B9%BF%E5%9C%B0%E9%87%8E%E5%A1%98&dev=0&t=0",
+          "iosamap://path?sourceApplication=FishAgent&dlat=30.329000&dlon=120.051000&dname=%E8%8B%95%E6%BA%AA%E6%B2%B3%E6%B9%BE&dev=0&t=0",
+          "iosamap://path?sourceApplication=FishAgent&dlat=30.220000&dlon=119.980000&dname=%E7%99%BD%E9%B9%AD%E6%B9%96&dev=0&t=0",
+          "iosamap://path?sourceApplication=FishAgent&dlat=30.139000&dlon=120.221000&dname=%E4%B9%9D%E9%BE%99%E6%B9%96&dev=0&t=0"
+        ],
+        "hint": {
+          "hidden": false,
+          "touch": 5
+        }
+      }
+    },
+    {
+      "id": "A40-ipados-768-no-overflow",
+      "ok": true,
+      "detail": {
+        "scrollWidth": 768,
+        "clientWidth": 768,
+        "bodyScrollWidth": 768,
+        "innerWidth": 768
+      }
+    },
+    {
+      "id": "A41-ipados-console-clean",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "A42-cr01-one-spots-request-limit10",
+      "ok": true,
+      "detail": [
+        "http://127.0.0.1:8033/api/spots/recommend?lat=30.657&lon=104.066&radius_km=50&limit=10"
+      ]
+    },
+    {
+      "id": "A43-cr01-first-render-local-slice",
+      "ok": true,
+      "detail": [
+        "青山水库",
+        "白鹭湾野塘",
+        "环城河湾",
+        "南湖湿地"
+      ]
+    },
+    {
+      "id": "A44-cr01-radius-refetch",
+      "ok": true,
+      "detail": [
+        "http://127.0.0.1:8033/api/spots/recommend?lat=30.657&lon=104.066&radius_km=50&limit=10",
+        "http://127.0.0.1:8033/api/spots/recommend?lat=30.657&lon=104.066&radius_km=100&limit=10"
+      ]
+    },
+    {
+      "id": "A45-cr01-live-console-clean",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    }
+  ]
+}

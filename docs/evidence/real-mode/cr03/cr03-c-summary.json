@@ -1,0 +1,287 @@
+{
+  "base_normal": "http://127.0.0.1:8022",
+  "base_rate": "http://127.0.0.1:8036",
+  "base_quota": "http://127.0.0.1:8034",
+  "total": 26,
+  "passed": 26,
+  "failed": 0,
+  "failures": [],
+  "results": [
+    {
+      "id": "C01A-unauthorized-redirect",
+      "ok": true,
+      "detail": {
+        "url": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "next": "/?from=qa&x=1",
+        "loginPage": true
+      }
+    },
+    {
+      "id": "C01A-unauthorized-code",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED"
+      }
+    },
+    {
+      "id": "C01A-unauthorized-no-loop",
+      "ok": true,
+      "detail": {
+        "before": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "after": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "loginNavigations": 1
+      }
+    },
+    {
+      "id": "C01B-invalid-token-redirect",
+      "ok": true,
+      "detail": {
+        "url": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "next": "/?from=qa&x=1",
+        "loginPage": true
+      }
+    },
+    {
+      "id": "C01B-invalid-token-code",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "INVALID_TOKEN"
+      }
+    },
+    {
+      "id": "C01B-invalid-token-no-loop",
+      "ok": true,
+      "detail": {
+        "before": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "after": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "loginNavigations": 1
+      }
+    },
+    {
+      "id": "C01C-expired-token-redirect",
+      "ok": true,
+      "detail": {
+        "url": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "next": "/?from=qa&x=1",
+        "loginPage": true
+      }
+    },
+    {
+      "id": "C01C-expired-token-code",
+      "ok": true,
+      "detail": {
+        "status": 401,
+        "code": "TOKEN_EXPIRED"
+      }
+    },
+    {
+      "id": "C01C-expired-token-no-loop",
+      "ok": true,
+      "detail": {
+        "before": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "after": "http://127.0.0.1:8022/pilot/login?next=%2F%3Ffrom%3Dqa%26x%3D1",
+        "loginNavigations": 1
+      }
+    },
+    {
+      "id": "C02-login-next-roundtrip",
+      "ok": true,
+      "detail": {
+        "url": "http://127.0.0.1:8022/?from=qa&x=1",
+        "cards": 4,
+        "apiStatuses": [
+          401,
+          401,
+          200,
+          200,
+          200
+        ]
+      }
+    },
+    {
+      "id": "C02-compliance",
+      "ok": true,
+      "detail": {
+        "forbidden": true,
+        "ai": true,
+        "disclaimer": true
+      }
+    },
+    {
+      "id": "C02-cr01-batch",
+      "ok": true,
+      "detail": {
+        "first": [
+          "青山水库",
+          "镜湖湿地野塘",
+          "苕溪河湾",
+          "白鹭湖",
+          "九龙湖"
+        ],
+        "second": [
+          "湘湖"
+        ],
+        "third": [
+          "青山水库",
+          "镜湖湿地野塘",
+          "苕溪河湾",
+          "白鹭湖",
+          "九龙湖"
+        ],
+        "status1": "已换到下一批钓位。",
+        "status2": "已展示全部推荐，已回到第 1 批。",
+        "spotsRequests": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "id": "C02-desktop-console-overflow",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": [],
+        "metrics": {
+          "sw": 1280,
+          "cw": 1280,
+          "iw": 1280
+        }
+      }
+    },
+    {
+      "id": "C03-pilot-path-no-redirect",
+      "ok": true,
+      "detail": {
+        "path": "/pilot/probe",
+        "apiStatuses": [
+          200,
+          200,
+          401,
+          401
+        ],
+        "error": "鱼情分析暂时不可用 登录凭证无效 钓位推荐暂时不可用 登录凭证无效"
+      }
+    },
+    {
+      "id": "C04-non-contract-401-no-redirect",
+      "ok": true,
+      "detail": {
+        "path": "/",
+        "activity": "鱼情分析暂时不可用 邀请码无效"
+      }
+    },
+    {
+      "id": "C05-rate-limited-429-response",
+      "ok": true,
+      "detail": {
+        "count": 1,
+        "retryAfter": [
+          "60"
+        ],
+        "statuses": [
+          200,
+          429
+        ]
+      }
+    },
+    {
+      "id": "C05-rate-limited-message",
+      "ok": true,
+      "detail": {
+        "expect": "请求过于频繁",
+        "text": "跳到主要内容 FishAgent 鱼情评分 · 钓位推荐 · 对话助手 Mock 模式 AI 生成 · 仅供参考 STEP 1 · 位置 选择你的位置 成都天府广场 · 30.6570, 104.0660 使用我的定位 或手动输入 WGS84 坐标（GPS 原始坐标） 纬度 经度 更新分析 STEP 2 · 鱼情 鱼口活跃度 Mock 数据 65 /100 一般 10/24 13:55 · Asia/Shanghai 有机会，建议挑时段，优先日出窗口。 档位建议：有机会，建议"
+      }
+    },
+    {
+      "id": "C05-rate-limited-no-auto-retry",
+      "ok": true,
+      "detail": {
+        "requestsAfter429": [],
+        "windowSeconds": 2.1
+      }
+    },
+    {
+      "id": "C06-quota-exceeded-429-response",
+      "ok": true,
+      "detail": {
+        "count": 2,
+        "retryAfter": [
+          "36262",
+          "36262"
+        ],
+        "statuses": [
+          429,
+          429
+        ]
+      }
+    },
+    {
+      "id": "C06-quota-exceeded-message",
+      "ok": true,
+      "detail": {
+        "expect": "今日额度已用完",
+        "text": "跳到主要内容 FishAgent 鱼情评分 · 钓位推荐 · 对话助手 在线数据 AI 生成 · 仅供参考 STEP 1 · 位置 选择你的位置 成都天府广场 · 30.6570, 104.0660 使用我的定位 或手动输入 WGS84 坐标（GPS 原始坐标） 纬度 经度 更新分析 STEP 2 · 鱼情 鱼口活跃度 鱼情分析暂时不可用 今日额度已用完，请 36262 秒后重试。 STEP 3 · 钓位 附近钓位 搜索半径 50 km 100 km 往返 ≤ 2 小时 换一"
+      }
+    },
+    {
+      "id": "C06-quota-exceeded-no-auto-retry",
+      "ok": true,
+      "detail": {
+        "requestsAfter429": [],
+        "windowSeconds": 2.1
+      }
+    },
+    {
+      "id": "C07-iphone-cr02",
+      "ok": true,
+      "detail": {
+        "cards": 5,
+        "appOk": true,
+        "fallbackOk": true,
+        "overflow": {
+          "sw": 375,
+          "cw": 375,
+          "iw": 375
+        }
+      }
+    },
+    {
+      "id": "C07-iphone-cr02-console",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "C08-android-cr02",
+      "ok": true,
+      "detail": {
+        "cards": 5,
+        "appOk": true,
+        "fallbackOk": true,
+        "overflow": {
+          "sw": 375,
+          "cw": 375,
+          "iw": 375
+        }
+      }
+    },
+    {
+      "id": "C08-android-cr02-console",
+      "ok": true,
+      "detail": {
+        "console": [],
+        "pageerror": []
+      }
+    },
+    {
+      "id": "C09-no-upstream-connections",
+      "ok": true,
+      "detail": "guard listening 2026-10-24T05:55:17.559192+00:00"
+    }
+  ]
+}

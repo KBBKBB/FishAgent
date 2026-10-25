@@ -1,0 +1,43 @@
+{
+  "status": 200,
+  "seconds": 12.922,
+  "count": 10,
+  "ids": [
+    "B0HRD7XB54",
+    "B0FFGFBM48",
+    "BY0001JUOA",
+    "B0FFGFBKOP",
+    "B0LRFN6G2X",
+    "B0FFHGR5GA",
+    "B0FFJEVZW2",
+    "B0FFG7IVMD",
+    "BY00004E33",
+    "B0FFM7SCTK"
+  ],
+  "names": [
+    "锦江",
+    "府河",
+    "西郊河",
+    "磨底河",
+    "摸底河",
+    "浣花溪",
+    "清水河",
+    "东湖",
+    "小沙河",
+    "肖家河"
+  ],
+  "filtered": {
+    "total_candidates": 48,
+    "forbidden": 0,
+    "unavailable": 0,
+    "over_two_hours": 0,
+    "eligible": 10,
+    "returned": 10,
+    "truncated_by_limit": 0,
+    "evaluated": 10,
+    "unevaluated": 38
+  },
+  "invariant": true,
+  "business_hits": [],
+  "round_trip_max": 6458
+}

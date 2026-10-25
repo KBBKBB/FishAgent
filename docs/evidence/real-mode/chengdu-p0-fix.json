@@ -1,0 +1,381 @@
+{
+  "origin": {
+    "lat": 30.657,
+    "lon": 104.066,
+    "name": "成都天府广场"
+  },
+  "server": {
+    "port": 8019,
+    "health": {
+      "status": "ok",
+      "version": "0.1.0",
+      "mock_mode": false
+    }
+  },
+  "spots_50km": {
+    "radius_km": 50,
+    "status": 200,
+    "elapsed_s": 13.73,
+    "filtered": {
+      "total_candidates": 49,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 39
+    },
+    "top5": [
+      {
+        "id": "B0HRD7XB54",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1052,
+        "drive_seconds_out": 548,
+        "drive_seconds_back": 548,
+        "drive_seconds_round_trip": 1096,
+        "fish_score": 85,
+        "total_score": 87.6,
+        "location_gcj02": {
+          "lat": 30.646826,
+          "lon": 104.062212
+        },
+        "entry_location_gcj02": {
+          "lat": 30.646826,
+          "lon": 104.062212
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.062212,30.646826&name=%E9%94%A6%E6%B1%9F&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "B0FFGFBM48",
+        "name": "府河",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1771,
+        "drive_seconds_out": 656,
+        "drive_seconds_back": 656,
+        "drive_seconds_round_trip": 1312,
+        "fish_score": 85,
+        "total_score": 87.1,
+        "location_gcj02": {
+          "lat": 30.648034,
+          "lon": 104.085385
+        },
+        "entry_location_gcj02": {
+          "lat": 30.648034,
+          "lon": 104.085385
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.085385,30.648034&name=%E5%BA%9C%E6%B2%B3&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "BY0001NRKN",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "成华区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2707,
+        "drive_seconds_out": 931,
+        "drive_seconds_back": 931,
+        "drive_seconds_round_trip": 1862,
+        "fish_score": 85,
+        "total_score": 85.7,
+        "location_gcj02": {
+          "lat": 30.669603,
+          "lon": 104.09078
+        },
+        "entry_location_gcj02": {
+          "lat": 30.669603,
+          "lon": 104.09078
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.090780,30.669603&name=%E9%94%A6%E6%B1%9F&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "BY0001JUOA",
+        "name": "西郊河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2318,
+        "drive_seconds_out": 997,
+        "drive_seconds_back": 997,
+        "drive_seconds_round_trip": 1994,
+        "fish_score": 85,
+        "total_score": 85.4,
+        "location_gcj02": {
+          "lat": 30.661022,
+          "lon": 104.045461
+        },
+        "entry_location_gcj02": {
+          "lat": 30.661022,
+          "lon": 104.045461
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.045461,30.661022&name=%E8%A5%BF%E9%83%8A%E6%B2%B3&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "B0FFG7IVMD",
+        "name": "东湖",
+        "water_type": "湖泊",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 4532,
+        "drive_seconds_out": 1046,
+        "drive_seconds_back": 1026,
+        "drive_seconds_round_trip": 2072,
+        "fish_score": 85,
+        "total_score": 85.2,
+        "location_gcj02": {
+          "lat": 30.6171,
+          "lon": 104.087117
+        },
+        "entry_location_gcj02": {
+          "lat": 30.6171,
+          "lon": 104.087117
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.087117,30.617100&name=%E4%B8%9C%E6%B9%96&coordinate=gaode&callnative=1"
+      }
+    ],
+    "checks": {
+      "invariants": {
+        "total": true,
+        "evaluated": true,
+        "eligible": true,
+        "returned": true
+      },
+      "all_invariants": true,
+      "round_trip_ok": true,
+      "all_natural_water": true,
+      "unique_names": false,
+      "all_center_fallback": true
+    }
+  },
+  "spots_100km": {
+    "radius_km": 100,
+    "status": 200,
+    "elapsed_s": 34.26,
+    "filtered": {
+      "total_candidates": 649,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 639
+    },
+    "top5": [
+      {
+        "id": "B0HRD7XB54",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1052,
+        "drive_seconds_out": 570,
+        "drive_seconds_back": 570,
+        "drive_seconds_round_trip": 1140,
+        "fish_score": 85,
+        "total_score": 87.5,
+        "location_gcj02": {
+          "lat": 30.646826,
+          "lon": 104.062212
+        },
+        "entry_location_gcj02": {
+          "lat": 30.646826,
+          "lon": 104.062212
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.062212,30.646826&name=%E9%94%A6%E6%B1%9F&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "B0FFGFBM48",
+        "name": "府河",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1771,
+        "drive_seconds_out": 683,
+        "drive_seconds_back": 683,
+        "drive_seconds_round_trip": 1366,
+        "fish_score": 85,
+        "total_score": 86.9,
+        "location_gcj02": {
+          "lat": 30.648034,
+          "lon": 104.085385
+        },
+        "entry_location_gcj02": {
+          "lat": 30.648034,
+          "lon": 104.085385
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.085385,30.648034&name=%E5%BA%9C%E6%B2%B3&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "BY0001NRKN",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "成华区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2707,
+        "drive_seconds_out": 901,
+        "drive_seconds_back": 901,
+        "drive_seconds_round_trip": 1802,
+        "fish_score": 85,
+        "total_score": 85.9,
+        "location_gcj02": {
+          "lat": 30.669603,
+          "lon": 104.09078
+        },
+        "entry_location_gcj02": {
+          "lat": 30.669603,
+          "lon": 104.09078
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.090780,30.669603&name=%E9%94%A6%E6%B1%9F&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "BY0001JUOA",
+        "name": "西郊河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2318,
+        "drive_seconds_out": 1008,
+        "drive_seconds_back": 1008,
+        "drive_seconds_round_trip": 2016,
+        "fish_score": 85,
+        "total_score": 85.3,
+        "location_gcj02": {
+          "lat": 30.661022,
+          "lon": 104.045461
+        },
+        "entry_location_gcj02": {
+          "lat": 30.661022,
+          "lon": 104.045461
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.045461,30.661022&name=%E8%A5%BF%E9%83%8A%E6%B2%B3&coordinate=gaode&callnative=1"
+      },
+      {
+        "id": "B0FFG7IVMD",
+        "name": "东湖",
+        "water_type": "湖泊",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 4532,
+        "drive_seconds_out": 1033,
+        "drive_seconds_back": 1033,
+        "drive_seconds_round_trip": 2066,
+        "fish_score": 85,
+        "total_score": 85.2,
+        "location_gcj02": {
+          "lat": 30.6171,
+          "lon": 104.087117
+        },
+        "entry_location_gcj02": {
+          "lat": 30.6171,
+          "lon": 104.087117
+        },
+        "navigation_url": "https://uri.amap.com/marker?position=104.087117,30.617100&name=%E4%B8%9C%E6%B9%96&coordinate=gaode&callnative=1"
+      }
+    ],
+    "checks": {
+      "invariants": {
+        "total": true,
+        "evaluated": true,
+        "eligible": true,
+        "returned": true
+      },
+      "all_invariants": true,
+      "round_trip_ok": true,
+      "all_natural_water": true,
+      "unique_names": false,
+      "all_center_fallback": true
+    }
+  },
+  "spots_100km_second": {
+    "status": 200,
+    "elapsed_s": 30.13,
+    "filtered": {
+      "total_candidates": 649,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 639
+    },
+    "top5": [
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "out": 575,
+        "back": 575,
+        "round_trip": 1150,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "府河",
+        "water_type": "河流",
+        "out": 705,
+        "back": 705,
+        "round_trip": 1410,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "out": 922,
+        "back": 922,
+        "round_trip": 1844,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "西郊河",
+        "water_type": "河流",
+        "out": 994,
+        "back": 994,
+        "round_trip": 1988,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "东湖",
+        "water_type": "湖泊",
+        "out": 1036,
+        "back": 1036,
+        "round_trip": 2072,
+        "entry_precision": "center_fallback"
+      }
+    ],
+    "invariants": {
+      "total": true,
+      "evaluated": true,
+      "eligible": true,
+      "returned": true
+    }
+  },
+  "p0_checks": {
+    "50km": {
+      "restaurant_excluded": true,
+      "top5_all_natural_water": true,
+      "round_trip_ok": true,
+      "all_invariants": true,
+      "unique_names": false
+    },
+    "100km": {
+      "restaurant_excluded": true,
+      "top5_all_natural_water": true,
+      "round_trip_ok": true,
+      "all_invariants": true,
+      "unique_names": false
+    },
+    "100km_second": {
+      "restaurant_excluded": true,
+      "round_trip_ok": true,
+      "all_invariants": true
+    }
+  }
+}

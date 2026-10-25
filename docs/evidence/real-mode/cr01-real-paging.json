@@ -1,0 +1,92 @@
+{
+  "offset_0": {
+    "status": 200,
+    "seconds": 12.87,
+    "ids": [
+      "B0HRD7XB54",
+      "B0FFGFBM48",
+      "BY0001JUOA",
+      "B0FFGFBKOP",
+      "B0LRFN6G2X"
+    ],
+    "names": [
+      "锦江",
+      "府河",
+      "西郊河",
+      "磨底河",
+      "摸底河"
+    ],
+    "round_trip": [
+      1294,
+      1628,
+      2476,
+      2880,
+      2894
+    ],
+    "entry_source": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "filtered": {
+      "total_candidates": 49,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 39
+    },
+    "invariant": true
+  },
+  "offset_5": {
+    "status": 200,
+    "seconds": 12.765,
+    "ids": [
+      "B0FFJEVZW2",
+      "B0FFG7IVMD",
+      "B0KDFM5DH5",
+      "BY00004E33",
+      "B0FFM7SCTK"
+    ],
+    "names": [
+      "清水河",
+      "东湖",
+      "水泥河沙经营部",
+      "小沙河",
+      "肖家河"
+    ],
+    "round_trip": [
+      2960,
+      3212,
+      3604,
+      3758,
+      6324
+    ],
+    "entry_source": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "filtered": {
+      "total_candidates": 49,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 39
+    },
+    "invariant": true
+  },
+  "overlap": [],
+  "unique_within_pages": true
+}

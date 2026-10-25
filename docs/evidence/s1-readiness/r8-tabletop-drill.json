@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-22",
+  "type": "tabletop",
+  "scope": "R8 P0/P1 escalation path",
+  "scenario": "P1: 成都 50km 钓位连续 2 次超时",
+  "steps": [
+    {"stage": "report", "owner": "用户", "channel": "试点微信群", "action": "反馈现象与发生时间"},
+    {"stage": "triage", "owner": "值班人 kbbisgentleman", "action": "确认收到，通知小项，记录时间与影响范围"},
+    {"stage": "diagnose", "owner": "小项", "action": "检查 /health、服务日志与最近一次请求结果，判定级别"},
+    {"stage": "escalate", "owner": "小项 -> 小钱/小厚/小测", "action": "P1 通知研发；P0 同时准备 R10 回滚"},
+    {"stage": "stop-loss", "owner": "小项", "action": "必要时切 Mock 或停服，记录时间线"},
+    {"stage": "fix", "owner": "小钱/小厚", "action": "定位并修复；小测复验"},
+    {"stage": "report", "owner": "小项", "action": "向试点群同步处置结果与恢复时间"}
+  ],
+  "targets": {
+    "P0_first_response": "30m",
+    "P0_stop_loss": "2h",
+    "P1_first_response": "4h",
+    "P1_resolve": "same day",
+    "P2": "next business day"
+  },
+  "paths_verified": [
+    "用户 -> 试点微信群 -> 值班人",
+    "值班人 -> 小项",
+    "小项 -> 研发（小钱/小厚/小测）",
+    "小项 -> R10 回滚"
+  ],
+  "limitations": [
+    "试点微信群尚未建立",
+    "未发送真实告警消息；S1 启动时补一次实时测试"
+  ],
+  "result": "PASS (tabletop path/role check)",
+  "evidence": [
+    "docs/pilot-checklist.md §H",
+    "docs/evidence/real-mode/rollback-drill.json"
+  ]
+}

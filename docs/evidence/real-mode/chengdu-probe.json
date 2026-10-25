@@ -1,0 +1,167 @@
+{
+  "origin": {
+    "lat": 30.657,
+    "lon": 104.066,
+    "name": "成都天府广场"
+  },
+  "date": "2026-10-22",
+  "fish": {
+    "elapsed_s": 1.38,
+    "score": 85,
+    "band": "极佳",
+    "factor_sum": 85,
+    "windows": [
+      {
+        "start": "05:39",
+        "end": "08:39",
+        "label": "日出窗口"
+      },
+      {
+        "start": "16:26",
+        "end": "18:26",
+        "label": "日落窗口"
+      }
+    ],
+    "data_sources": [
+      "Open-Meteo",
+      "FishAgent 规则引擎 v1"
+    ],
+    "generated_at": "2026-10-22T07:33:24Z"
+  },
+  "spots_100km": {
+    "elapsed_s": 33.33,
+    "filtered": {
+      "total_candidates": 650,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 640
+    },
+    "top5": [
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1064,
+        "distance_m": 1052,
+        "address": "锦江区"
+      },
+      {
+        "name": "府河",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1234,
+        "distance_m": 1771,
+        "address": "锦江区"
+      },
+      {
+        "name": "碗山河·西南风味菜·现炒浇头面(水璟唐店)",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1806,
+        "distance_m": 2015,
+        "address": "锦江区"
+      },
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1876,
+        "distance_m": 2707,
+        "address": "成华区"
+      },
+      {
+        "name": "东湖",
+        "water_type": "湖泊",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 2038,
+        "distance_m": 4532,
+        "address": "锦江区"
+      }
+    ]
+  },
+  "spots_50km": {
+    "elapsed_s": 16.45,
+    "filtered": {
+      "total_candidates": 50,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 40
+    },
+    "top5": [
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1064,
+        "distance_m": 1052,
+        "address": "锦江区"
+      },
+      {
+        "name": "府河",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1234,
+        "distance_m": 1771,
+        "address": "锦江区"
+      },
+      {
+        "name": "碗山河·西南风味菜·现炒浇头面(水璟唐店)",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1804,
+        "distance_m": 2015,
+        "address": "锦江区"
+      },
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 1894,
+        "distance_m": 2707,
+        "address": "成华区"
+      },
+      {
+        "name": "东湖",
+        "water_type": "湖泊",
+        "entry_precision": "center_fallback",
+        "drive_seconds_round_trip": 2038,
+        "distance_m": 4532,
+        "address": "锦江区"
+      }
+    ]
+  },
+  "amap_raw_pois": [
+    {
+      "name": "碗山河·西南风味菜·现炒浇头面(水璟唐店)",
+      "typecode": "190204",
+      "type": "地名地址信息;自然地名;河流",
+      "address": "锦江区",
+      "location": "104.085373,30.643728"
+    },
+    {
+      "name": "碗山河",
+      "typecode": "050000",
+      "type": "餐饮服务;餐饮相关场所;餐饮相关",
+      "address": "锦官驿街1号水璟唐F1层",
+      "location": "104.085373,30.643728"
+    }
+  ],
+  "findings": [
+    "P0: Top5 含餐饮 POI「碗山河·西南风味菜·现炒浇头面(水璟唐店)」，AMap 自身 typecode=190204（自然地名;河流），名称含经营词；同坐标另有 050000 餐饮 POI。",
+    "P1/合规: 成都 50/100km forbidden=0；现有示例禁钓圆区仅覆盖杭州西湖，成都无本地禁钓边界或人工清单。",
+    "H5 默认位置仍为杭州，默认半径 100km；D1 成都、D10 默认 50km 尚未落地。",
+    "Top5 全部 center_fallback；入口坐标稀疏与杭州一致。",
+    "100km/50km 性能 19.35s/14.19s，均在阈值内；往返均 ≤7200s。",
+    "锦江在 Top5 出现两次（不同 POI/河段），当前仅按 POI id 去重，需确认展示是否可接受。"
+  ]
+}

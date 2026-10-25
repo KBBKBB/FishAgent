@@ -1,0 +1,155 @@
+{
+  "total": 11,
+  "passed": 11,
+  "results": [
+    {
+      "id": "P2a-8022-UNAUTHORIZED-headers",
+      "status": "PASS",
+      "detail": {
+        "status": 401,
+        "code": "UNAUTHORIZED",
+        "cacheControl": "no-store",
+        "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+        "noStore": true,
+        "challengeMatch": true
+      }
+    },
+    {
+      "id": "P2a-8022-INVALID_TOKEN-headers",
+      "status": "PASS",
+      "detail": {
+        "status": 401,
+        "code": "INVALID_TOKEN",
+        "cacheControl": "no-store",
+        "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+        "noStore": true,
+        "challengeMatch": true
+      }
+    },
+    {
+      "id": "P2a-8022-TOKEN_EXPIRED-headers",
+      "status": "PASS",
+      "detail": {
+        "status": 401,
+        "code": "TOKEN_EXPIRED",
+        "cacheControl": "no-store",
+        "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+        "noStore": true,
+        "challengeMatch": true
+      }
+    },
+    {
+      "id": "P2a-8022-INVALID_INVITE_CODE-headers",
+      "status": "PASS",
+      "detail": {
+        "status": 401,
+        "code": "INVALID_INVITE_CODE",
+        "cacheControl": "no-store",
+        "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+        "noStore": true,
+        "challengeMatch": true
+      }
+    },
+    {
+      "id": "P2b-plan-startup-command",
+      "status": "PASS",
+      "detail": {
+        "line": "1. **进程模型**：`uvicorn fishagent.main:app --host 127.0.0.1 --port 8020 --workers 1 --no-access-log`，由 systemd 托管。限流与配额计数在进程内，因此试点阶段**必须单 worker**。"
+      }
+    },
+    {
+      "id": "P2b-plan-section-3.1",
+      "status": "PASS",
+      "detail": {
+        "has31": true,
+        "mentionsXFF": true
+      }
+    },
+    {
+      "id": "P2b-401-headers-on-no-log-instance",
+      "status": "PASS",
+      "detail": {
+        "unauthorized": {
+          "cacheControl": "no-store",
+          "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+          "noStore": true,
+          "challengeMatch": true
+        },
+        "invalid-token": {
+          "cacheControl": "no-store",
+          "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+          "noStore": true,
+          "challengeMatch": true
+        },
+        "expired-token": {
+          "cacheControl": "no-store",
+          "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+          "noStore": true,
+          "challengeMatch": true
+        },
+        "bad-invite": {
+          "cacheControl": "no-store",
+          "wwwAuthenticate": "Bearer realm=\"fishagent-pilot\"",
+          "noStore": true,
+          "challengeMatch": true
+        }
+      }
+    },
+    {
+      "id": "P2b-traffic-statuses",
+      "status": "PASS",
+      "detail": [
+        [
+          "health",
+          200
+        ],
+        [
+          "unauthorized",
+          401
+        ],
+        [
+          "invalid-token",
+          401
+        ],
+        [
+          "expired-token",
+          401
+        ],
+        [
+          "bad-invite",
+          401
+        ]
+      ]
+    },
+    {
+      "id": "P2b-login-and-business",
+      "status": "PASS",
+      "detail": {
+        "login": 200,
+        "activity": 200,
+        "spots": 200
+      }
+    },
+    {
+      "id": "P2b-no-access-log-lines",
+      "status": "PASS",
+      "detail": {
+        "requests": 8,
+        "accessLines": 0,
+        "startupLines": 4
+      }
+    },
+    {
+      "id": "P2c-8018-health-only",
+      "status": "PASS",
+      "detail": {
+        "status": 200,
+        "body": {
+          "status": "ok",
+          "version": "0.1.0",
+          "mock_mode": false
+        }
+      }
+    }
+  ]
+}

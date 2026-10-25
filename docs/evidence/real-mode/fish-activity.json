@@ -1,0 +1,132 @@
+{
+  "score": 88,
+  "band": "极佳",
+  "advice": "强烈建议出钓",
+  "recommendation": "强烈建议出钓，全天可钓，优先日出与日落窗口。",
+  "factors": [
+    {
+      "code": "F1",
+      "name": "气压变化趋势",
+      "score": 25,
+      "max_score": 25,
+      "impact": "positive",
+      "detail": "未来24h气压缓降 7.5hPa（近3h -0.6hPa，近6h -0.4hPa），鱼口活跃信号"
+    },
+    {
+      "code": "F2",
+      "name": "气压绝对值",
+      "score": 12,
+      "max_score": 20,
+      "impact": "neutral",
+      "detail": "无近30天历史分布，气压处于兜底口径边缘区间（当前 1022.4hPa）"
+    },
+    {
+      "code": "F3",
+      "name": "气温与变温",
+      "score": 15,
+      "max_score": 15,
+      "impact": "positive",
+      "detail": "日均温 18.2℃，24h变温 +2.0℃，昼夜温差 5.1℃"
+    },
+    {
+      "code": "F4",
+      "name": "风力风向",
+      "score": 15,
+      "max_score": 15,
+      "impact": "positive",
+      "detail": "东风 4.6m/s（3级），微风增氧，适合观漂"
+    },
+    {
+      "code": "F5",
+      "name": "降水与降水窗口",
+      "score": 10,
+      "max_score": 10,
+      "impact": "positive",
+      "detail": "小雨 4.7mm/日，适合作钓"
+    },
+    {
+      "code": "F6",
+      "name": "季节与时段",
+      "score": 7,
+      "max_score": 10,
+      "impact": "neutral",
+      "detail": "春秋季非窗口时段（本地 13:41）"
+    },
+    {
+      "code": "F7",
+      "name": "云量光照",
+      "score": 4,
+      "max_score": 5,
+      "impact": "positive",
+      "detail": "云量 100%，阴天光照偏弱"
+    }
+  ],
+  "top_factors": [
+    {
+      "code": "F1",
+      "name": "气压变化趋势",
+      "score": 25,
+      "max_score": 25,
+      "impact": "positive",
+      "detail": "未来24h气压缓降 7.5hPa（近3h -0.6hPa，近6h -0.4hPa），鱼口活跃信号"
+    },
+    {
+      "code": "F3",
+      "name": "气温与变温",
+      "score": 15,
+      "max_score": 15,
+      "impact": "positive",
+      "detail": "日均温 18.2℃，24h变温 +2.0℃，昼夜温差 5.1℃"
+    },
+    {
+      "code": "F4",
+      "name": "风力风向",
+      "score": 15,
+      "max_score": 15,
+      "impact": "positive",
+      "detail": "东风 4.6m/s（3级），微风增氧，适合观漂"
+    }
+  ],
+  "best_windows": [
+    {
+      "start": "04:35",
+      "end": "07:35",
+      "label": "日出窗口"
+    },
+    {
+      "start": "15:22",
+      "end": "17:22",
+      "label": "日落窗口"
+    }
+  ],
+  "water_depth": "先钓 1.5–2m 浅滩，无口则转 3m 以上",
+  "suitable_species": [
+    "鲫鱼",
+    "鲤鱼"
+  ],
+  "alerts": [],
+  "weather_summary": {
+    "pressure_msl": 1022.4,
+    "pressure_change_24h": -7.5,
+    "pressure_change_3h": -0.6000000000000227,
+    "pressure_change_6h": -0.39999999999997726,
+    "temperature": 18.162499999999998,
+    "temperature_change_24h": 2.0375000000000014,
+    "diurnal_range": 5.100000000000001,
+    "wind_speed_ms": 4.555555555555555,
+    "wind_level": 3,
+    "wind_direction": "东风",
+    "precipitation_mm": 4.7,
+    "cloud_cover_pct": 100.0,
+    "sunrise": "06:05",
+    "sunset": "17:22",
+    "is_thunderstorm": false
+  },
+  "data_sources": [
+    "Open-Meteo",
+    "FishAgent 规则引擎 v1"
+  ],
+  "ai_disclosure": "本结论由 AI 辅助生成，仅供参考，不承诺渔获。",
+  "timezone": "Asia/Shanghai",
+  "generated_at": "2026-10-22T05:41:23Z"
+}

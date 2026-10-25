@@ -1,0 +1,215 @@
+{
+  "origin": {
+    "lat": 30.657,
+    "lon": 104.066,
+    "name": "成都天府广场"
+  },
+  "health": {
+    "status": "ok",
+    "version": "0.1.0",
+    "mock_mode": false
+  },
+  "spots_50km": {
+    "radius_km": 50,
+    "status": 200,
+    "elapsed_s": 15.2,
+    "filtered": {
+      "total_candidates": 49,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 39
+    },
+    "top5": [
+      {
+        "id": "B0HRD7XB54",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1052,
+        "out": 631,
+        "back": 631,
+        "round_trip": 1262,
+        "fish_score": 94,
+        "total_score": 93.0
+      },
+      {
+        "id": "B0FFGFBM48",
+        "name": "府河",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1771,
+        "out": 641,
+        "back": 641,
+        "round_trip": 1282,
+        "fish_score": 94,
+        "total_score": 93.0
+      },
+      {
+        "id": "BY0001JUOA",
+        "name": "西郊河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2318,
+        "out": 1001,
+        "back": 1001,
+        "round_trip": 2002,
+        "fish_score": 94,
+        "total_score": 91.2
+      },
+      {
+        "id": "B0FFG7IVMD",
+        "name": "东湖",
+        "water_type": "湖泊",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 4532,
+        "out": 1054,
+        "back": 1054,
+        "round_trip": 2108,
+        "fish_score": 94,
+        "total_score": 91.0
+      },
+      {
+        "id": "B0FFJEVZW2",
+        "name": "清水河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 3150,
+        "out": 1074,
+        "back": 1074,
+        "round_trip": 2148,
+        "fish_score": 94,
+        "total_score": 90.9
+      }
+    ],
+    "checks": {
+      "all_water_types": true,
+      "no_business_names": true,
+      "round_trip_ok": true,
+      "unique_ids": true
+    }
+  },
+  "spots_100km": {
+    "radius_km": 100,
+    "status": 200,
+    "elapsed_s": 20.11,
+    "filtered": {
+      "total_candidates": 649,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 639
+    },
+    "top5": [
+      {
+        "id": "B0HRD7XB54",
+        "name": "锦江",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1052,
+        "out": 697,
+        "back": 697,
+        "round_trip": 1394,
+        "fish_score": 94,
+        "total_score": 92.7
+      },
+      {
+        "id": "B0FFGFBM48",
+        "name": "府河",
+        "water_type": "河流",
+        "address": "锦江区",
+        "entry_precision": "center_fallback",
+        "distance_m": 1771,
+        "out": 713,
+        "back": 713,
+        "round_trip": 1426,
+        "fish_score": 94,
+        "total_score": 92.6
+      },
+      {
+        "id": "BY0001JUOA",
+        "name": "西郊河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2318,
+        "out": 1080,
+        "back": 1080,
+        "round_trip": 2160,
+        "fish_score": 94,
+        "total_score": 90.8
+      },
+      {
+        "id": "B0FFH4TORR",
+        "name": "府河(锦江)",
+        "water_type": "河流",
+        "address": "金牛区",
+        "entry_precision": "center_fallback",
+        "distance_m": 2520,
+        "out": 1085,
+        "back": 1085,
+        "round_trip": 2170,
+        "fish_score": 94,
+        "total_score": 90.8
+      },
+      {
+        "id": "B0FFGFBKOP",
+        "name": "磨底河",
+        "water_type": "河流",
+        "address": "青羊区",
+        "entry_precision": "center_fallback",
+        "distance_m": 3082,
+        "out": 1099,
+        "back": 1081,
+        "round_trip": 2180,
+        "fish_score": 94,
+        "total_score": 90.8
+      }
+    ],
+    "checks": {
+      "all_water_types": true,
+      "no_business_names": true,
+      "round_trip_ok": true,
+      "unique_ids": true
+    }
+  },
+  "chat": {
+    "status": 200,
+    "elapsed_s": 26.2,
+    "mode": "llm",
+    "tool_calls": [
+      {
+        "name": "get_fish_activity",
+        "args": {
+          "lat": 30.657,
+          "lon": 104.066
+        },
+        "status": "ok"
+      },
+      {
+        "name": "recommend_spots",
+        "args": {
+          "lat": 30.657,
+          "lon": 104.066
+        },
+        "status": "ok"
+      }
+    ],
+    "reply": "现在适合出钓：鱼情评分94，档位极佳，气压缓降、微风增氧，优先清晨05:39–08:39和傍晚16:26–18:26两个窗口，先钓1.5–2米浅水，无口再转3米以上。钓点首选锦江，距天府广场约1.1公里，单程约12分钟、往返约24分钟，河流水域且综合评分92.6；其次府河，约1.8公里，单程约12分钟、往返约24分钟，评分92.6；第三西郊河，约2.3公里，单程约18分钟、往返约36分钟，评分90.9。数据中可用的钓点只有这3个，无法凑足5个，不建议编造。当前无风险提示，但往返时间为基线估算，实际路况请预留余量。"
+  },
+  "failures": []
+}

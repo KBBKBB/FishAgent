@@ -1,0 +1,116 @@
+{
+  "100": {
+    "status": 200,
+    "elapsed_s": 20.79,
+    "filtered": {
+      "total_candidates": 644,
+      "forbidden": 9,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 625
+    },
+    "spots": [
+      {
+        "name": "古新河",
+        "water_type": "河流",
+        "out": 522,
+        "back": 522,
+        "round_trip": 1044,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "西溪",
+        "water_type": "河流",
+        "out": 639,
+        "back": 639,
+        "round_trip": 1278,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "东河",
+        "water_type": "河流",
+        "out": 699,
+        "back": 698,
+        "round_trip": 1397,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "中河",
+        "water_type": "河流",
+        "out": 782,
+        "back": 782,
+        "round_trip": 1564,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "希颜溪",
+        "water_type": "河流",
+        "out": 823,
+        "back": 826,
+        "round_trip": 1649,
+        "entry_precision": "center_fallback"
+      }
+    ]
+  },
+  "50": {
+    "status": 200,
+    "elapsed_s": 15.65,
+    "filtered": {
+      "total_candidates": 47,
+      "forbidden": 9,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 28
+    },
+    "spots": [
+      {
+        "name": "古新河",
+        "water_type": "河流",
+        "out": 522,
+        "back": 516,
+        "round_trip": 1038,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "西溪",
+        "water_type": "河流",
+        "out": 639,
+        "back": 640,
+        "round_trip": 1279,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "东河",
+        "water_type": "河流",
+        "out": 698,
+        "back": 699,
+        "round_trip": 1397,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "中河",
+        "water_type": "河流",
+        "out": 787,
+        "back": 787,
+        "round_trip": 1574,
+        "entry_precision": "center_fallback"
+      },
+      {
+        "name": "希颜溪",
+        "water_type": "河流",
+        "out": 823,
+        "back": 823,
+        "round_trip": 1646,
+        "entry_precision": "center_fallback"
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "total": 148,
+  "passed": 148,
+  "failed": 0,
+  "failures": [],
+  "evidence": [
+    "e2e-375.png",
+    "e2e-1280.png",
+    "acceptance-log.txt"
+  ]
+}

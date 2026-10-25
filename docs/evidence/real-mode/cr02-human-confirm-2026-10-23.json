@@ -1,0 +1,12 @@
+{
+  "cr": "CR-02",
+  "confirmed_at": "2026-10-23T20:10:00+08:00",
+  "source": "group_message",
+  "message_id": "cmsg_01m5maqf5vdckb2fh45c37dkb7",
+  "seq": 357,
+  "sender": "kbbisgentleman",
+  "sender_participant_id": "cpart_01m5f11s2esmsgvryzw0ffq2yj",
+  "text": "确认手机端可以直接打开高德地图",
+  "device": "mobile（型号未提供）",
+  "result": "human confirmed the Amap app opens directly on mobile; CR-02 accepted"
+}

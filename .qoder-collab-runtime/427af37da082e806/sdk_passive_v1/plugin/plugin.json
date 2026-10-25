@@ -1,0 +1,11 @@
+{
+  "name": "conversation-collab",
+  "version": "1.0.19",
+  "description": "Pinned collaboration Skill for conv_01m5f11s2b8as0qr3fky3sp7vf",
+  "author": {
+    "name": "Qoder Daemon"
+  },
+  "skills": [
+    "./skills/qoderwake-collab-group-passive"
+  ]
+}

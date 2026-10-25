@@ -1,0 +1,45 @@
+{
+  "recorded_at": "2026-10-23T15:30:00+08:00",
+  "recorded_by": "小项",
+  "purpose": "首批邀请后真实访问与供应商异常核验",
+  "sources": [
+    "backend/uvicorn-8018.out.log",
+    "backend/uvicorn-8018.err.log"
+  ],
+  "window": "2026-10-23 08:53 启动后至今",
+  "api_counts": {
+    "GET /api/fish-activity": 39,
+    "GET /api/spots/recommend": 29,
+    "POST /api/agent/chat": 7,
+    "GET /api/demo/config": 1
+  },
+  "distinct_client_ips": {
+    "192.168.31.68": 1053,
+    "127.0.0.1": 2
+  },
+  "latest_session": {
+    "sequence": [
+      "GET / 200",
+      "GET /styles.css 304, GET /app.js 304",
+      "GET /health 200",
+      "GET /api/fish-activity?lat=30.657&lon=104.066&location_name=成都天府广场 200",
+      "GET /api/spots/recommend?lat=30.657&lon=104.066&radius_km=50&limit=5 200",
+      "POST /api/agent/chat 200 x2"
+    ],
+    "note": "访问日志不含耗时；全部来源 IP 为主机自身 192.168.31.68，未出现其他内网设备地址"
+  },
+  "provider_errors": {
+    "amap_drive_qps": {
+      "code": "CUQPS_HAS_EXCEEDED_THE_LIMIT",
+      "count": 2,
+      "affected_spot_ids": ["B0FFG7IVMD", "B0FFFEDOIJ"]
+    },
+    "open_meteo_connect_timeout": {
+      "count": 2
+    },
+    "impact": "部分车程估算缺失、钓位鱼情基线降级；对应接口仍返回 200，未造成请求失败",
+    "log": "backend/uvicorn-8018.err.log"
+  },
+  "conclusion": "内网链路可用、完整会话 200；无外部设备来源记录，受邀手机实测来源待人类确认；高德 QPS 超限作为观察项 O-04 跟踪",
+  "compliance_note": "forbidden=0 仅为事实字段，不构成禁钓完整性结论；以当地公告为准"
+}

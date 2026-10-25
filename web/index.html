@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="FishAgent 提供鱼情活跃度评分、2 小时往返内的钓位推荐与自然语言钓鱼助手。">
+  <meta name="theme-color" content="#0e6b52">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="FishAgent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>FishAgent · 鱼情与钓位助手</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%230e6b52'/%3E%3Cpath d='M9 24c6.5-8.5 15.5-11 23-7.5 2.6 1.2 4.5 3.4 6 6-1.5 2.7-3.4 4.9-6 6-7.5 3.5-16.5 1-23-7.5Z' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linejoin='round'/%3E%3Ccircle cx='18' cy='21.7' r='1.7' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon-180.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="./" aria-label="FishAgent 首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="42" height="42" focusable="false">
+            <path d="M7 24c7.5-9.5 18-12.5 27-8.5 3 1.3 5.2 3.9 7 7-1.8 3.1-4 5.7-7 7-9 4-19.5 1-27-8.5Z" fill="rgba(255,255,255,.16)" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"></path>
+            <path d="m41 22.5 5-4.5v12l-5-4.5Z" fill="currentColor"></path>
+            <circle cx="17" cy="21.5" r="1.9" fill="currentColor"></circle>
+          </svg>
+        </span>
+        <span class="brand-copy">
+          <span class="brand-name">FishAgent</span>
+          <span class="brand-tagline">鱼情评分 · 钓位推荐 · 对话助手</span>
+        </span>
+      </a>
+      <div class="header-badges">
+        <button type="button" class="btn btn-install" id="install-btn" hidden>安装到桌面</button>
+        <span class="badge badge-mode" id="mode-badge" hidden>Mock 模式</span>
+        <span class="badge badge-ai"><span class="badge-dot" aria-hidden="true"></span>AI 生成 · 仅供参考</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap offline-banner" id="offline-banner" role="status" aria-live="polite" hidden>
+    <span class="offline-dot" aria-hidden="true"></span>
+    <span>当前处于离线状态，鱼情与钓位数据暂不可用；恢复网络后将自动重试。</span>
+  </div>
+
+  <div class="wrap install-hint" id="ios-install-hint" role="note" hidden>
+    <p><strong>安装到主屏幕：</strong>在 Safari 中点击“分享” → “添加到主屏幕”，即可像 App 一样打开 FishAgent。</p>
+    <button type="button" class="hint-close" id="ios-install-close" aria-label="关闭安装提示">×</button>
+  </div>
+
+  <div class="wrap status-region" id="status-region" role="status" aria-live="polite" hidden></div>
+
+  <main class="wrap layout" id="main">
+    <div class="primary-col">
+      <section class="card" aria-labelledby="location-title">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Step 1 · 位置</p>
+            <h2 id="location-title">选择你的位置</h2>
+          </div>
+          <p class="location-summary" id="location-summary"></p>
+        </div>
+        <div class="location-row">
+          <button type="button" class="btn btn-primary" id="geo-btn">使用我的定位</button>
+          <span class="hint">或手动输入 WGS84 坐标（GPS 原始坐标）</span>
+        </div>
+        <form class="coord-form" id="coord-form" novalidate>
+          <label class="field">
+            <span>纬度</span>
+            <input id="lat-input" name="lat" type="number" inputmode="decimal" step="0.0001" min="-90" max="90" required>
+          </label>
+          <label class="field">
+            <span>经度</span>
+            <input id="lon-input" name="lon" type="number" inputmode="decimal" step="0.0001" min="-180" max="180" required>
+          </label>
+          <button type="submit" class="btn btn-secondary">更新分析</button>
+        </form>
+        <p class="hint" id="geo-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="card" aria-labelledby="activity-title">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Step 2 · 鱼情</p>
+            <h2 id="activity-title">鱼口活跃度</h2>
+          </div>
+          <span class="pill pill-soft" id="activity-mode-pill" hidden></span>
+        </div>
+        <div class="card-body" id="activity-body" aria-busy="true"></div>
+      </section>
+
+      <section class="card" aria-labelledby="spots-title">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Step 3 · 钓位</p>
+            <h2 id="spots-title">附近钓位</h2>
+          </div>
+          <div class="spots-tools">
+            <label class="radius-field" for="radius-select">
+              <span>搜索半径</span>
+              <select id="radius-select" name="radius_km">
+                <option value="50" selected>50 km</option>
+                <option value="100">100 km</option>
+              </select>
+            </label>
+            <span class="pill pill-soft">往返 ≤ 2 小时</span>
+            <button type="button" class="btn btn-secondary spots-refresh" id="spots-refresh" disabled>换一批</button>
+          </div>
+        </div>
+        <div class="card-body" id="spots-body" aria-busy="true"></div>
+        <p class="spots-compliance">禁钓提示：国家公园、自然保护区、饮用水水源保护区等保护地禁止垂钓；其他水域是否可钓以当地公告为准。</p>
+      </section>
+    </div>
+
+    <aside class="chat-col">
+      <section class="card chat-card" aria-labelledby="chat-title">
+        <div class="card-head chat-head">
+          <div>
+            <p class="eyebrow">AI 助手</p>
+            <h2 id="chat-title">问问钓鱼助手</h2>
+          </div>
+          <span class="chat-status" id="chat-status"><span class="badge-dot" aria-hidden="true"></span><span id="chat-status-text">在线</span></span>
+        </div>
+        <div class="quick-questions" role="group" aria-label="示例问题">
+          <button type="button" class="chip-btn" data-question="今天气压适合钓鱼吗？">今天气压适合钓鱼吗？</button>
+          <button type="button" class="chip-btn" data-question="附近哪里野钓好？">附近哪里野钓好？</button>
+          <button type="button" class="chip-btn" data-question="明早几点去最好？">明早几点去最好？</button>
+        </div>
+        <div class="chat-messages" id="chat-messages" aria-live="polite" aria-relevant="additions text">
+          <div class="msg msg-assistant">
+            <div class="msg-bubble">你好，我是 FishAgent 钓鱼助手。可以问我今天的鱼情、附近钓位，或明早的最佳出钓时段。所有建议由 AI 生成，仅供参考。</div>
+            <div class="msg-meta"><span class="mini-badge">AI 生成</span><span class="mini-badge mini-badge-soft">仅供参考</span></div>
+          </div>
+        </div>
+        <form class="chat-form" id="chat-form">
+          <label class="sr-only" for="chat-input">输入你的问题</label>
+          <input id="chat-input" name="message" type="text" maxlength="500" autocomplete="off" placeholder="例如：今天气压适合钓鱼吗？" required>
+          <button type="submit" class="btn btn-primary" id="chat-send">发送</button>
+        </form>
+        <p class="chat-note">对话由 AI 生成，仅供参考，不承诺渔获；请遵守当地禁钓规定。</p>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p><strong>免责声明：</strong>鱼情评分与钓位推荐由 AI 规则引擎辅助生成，仅供参考，不承诺渔获。请遵守当地禁钓规定，注意水边人身安全。</p>
+      <p class="footer-meta">坐标系统 WGS84 · 导航由高德地图提供服务 · 页面不包含任何 API Key</p>
+    </div>
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>

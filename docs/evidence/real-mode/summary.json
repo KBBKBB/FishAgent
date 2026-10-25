@@ -1,0 +1,128 @@
+{
+  "date": "2026-10-22",
+  "phase": "P2 closeout",
+  "mock_mode": false,
+  "providers": {
+    "weather": "Open-Meteo",
+    "geo": "AMap Web Service",
+    "llm": "DeepSeek OpenAI-compatible"
+  },
+  "automated": {
+    "pytest": { "passed": 97, "failed": 0, "seconds": 3.46, "log": "docs/evidence/real-mode/pytest-full-p2.log" },
+    "ruff": "All checks passed!",
+    "ruff_log": "docs/evidence/real-mode/ruff-p2.log"
+  },
+  "fish_activity": {
+    "location": "杭州西湖",
+    "score": 88,
+    "band": "极佳",
+    "factor_sum": 88,
+    "data_sources": ["Open-Meteo", "FishAgent 规则引擎 v1"],
+    "timezone": "Asia/Shanghai",
+    "generated_at": "2026-10-22T05:41:23Z"
+  },
+  "spots": {
+    "100km": {
+      "elapsed_s": 20.25,
+      "filtered": {
+        "total_candidates": 650,
+        "forbidden": 9,
+        "unavailable": 0,
+        "over_two_hours": 0,
+        "eligible": 10,
+        "returned": 5,
+        "truncated_by_limit": 5,
+        "evaluated": 10,
+        "unevaluated": 631
+      },
+      "top5": ["古新河", "西溪", "东河", "中河", "希颜溪"],
+      "top5_water_types": ["河流", "河流", "河流", "河流", "河流"],
+      "top5_round_trip_seconds": [978, 1254, 1476, 1698, 1774],
+      "entry_precision": "center_fallback"
+    },
+    "50km": {
+      "elapsed_s": 13.19,
+      "filtered": {
+        "total_candidates": 50,
+        "forbidden": 9,
+        "unavailable": 0,
+        "over_two_hours": 0,
+        "eligible": 10,
+        "returned": 5,
+        "truncated_by_limit": 5,
+        "evaluated": 10,
+        "unevaluated": 31
+      }
+    },
+    "evidence": "docs/evidence/real-mode/spots-perf-p2.json"
+  },
+  "chengdu_probe": {
+    "origin": { "lat": 30.657, "lon": 104.066, "name": "成都天府广场" },
+    "fish": { "score": 85, "band": "极佳", "elapsed_s": 1.38 },
+    "spots_100km": { "elapsed_s": 19.35, "repeat_elapsed_s": 33.33, "filtered": { "total_candidates": 650, "forbidden": 0, "evaluated": 10, "unevaluated": 640 } },
+    "spots_50km": { "elapsed_s": 16.45, "filtered": { "total_candidates": 50, "forbidden": 0, "evaluated": 10, "unevaluated": 40 } },
+    "p0": "Top5 contains restaurant POI 碗山河·西南风味菜·现炒浇头面(水璟唐店) mislabeled by AMap as typecode 190204",
+    "evidence": "docs/evidence/real-mode/chengdu-probe.json",
+    "status": "NO-GO until P0 fix + D11 Chengdu forbidden/water list"
+  },
+  "agent_chat": [
+    {
+      "question": "今天气压适合钓鱼吗？",
+      "mode": "llm",
+      "tool": "get_fish_activity",
+      "sentences": 4,
+      "elapsed_s": 2.84,
+      "markdown_markers": false
+    },
+    {
+      "question": "附近哪里野钓好？",
+      "mode": "llm",
+      "tool": "recommend_spots",
+      "sentences": 4,
+      "elapsed_s": 20.31,
+      "markdown_markers": false
+    },
+    {
+      "question": "明早几点去最好？",
+      "mode": "llm",
+      "tool": "get_fish_activity",
+      "sentences": 3,
+      "elapsed_s": 3.34,
+      "markdown_markers": false
+    }
+  ],
+  "h5_e2e": {
+    "checks_passed": 52,
+    "failures": 0,
+    "warnings": 0,
+    "viewports": ["375x812", "1280x800"],
+    "console_errors": 0,
+    "horizontal_scroll": false,
+    "slow_load_hint": "verified at 100km (3s threshold)",
+    "unevaluated_display": "verified (未评估 631（超出本轮预算）)",
+    "screenshots": [
+      "docs/evidence/real-mode/web-real-375.png",
+      "docs/evidence/real-mode/web-real-1280.png"
+    ],
+    "log": "docs/evidence/real-mode/h5-e2e.log"
+  },
+  "p2_status": {
+    "P2-A_multi_typecode_recall": "fixed in backend/fishagent/providers/amap.py; unit test test_around_search_keeps_multi_typecode_water_pois; 97 tests pass",
+    "P2-B_entry_coordinates": "sparsity confirmed: 9/50 natural-water POIs have entr_location (18%); Top5 rivers none; recommendation A (keep center_fallback + explicit warning), C only if pilot feedback shows navigation issues",
+    "P2-C_h5_unevaluated_and_slow_hint": "implemented in web/app.js; real 100km 52/52 checks pass; Mock hides unevaluated"
+  },
+  "security": {
+    "keys_location": "backend/.env (gitignored)",
+    "leak_scan": "0 hits for exact AMap/LLM key values or sk- pattern across repo and shared dir (excluding backend/.env)",
+    "rotation_required": true
+  },
+  "residual_risks": [
+    "回程按用户→钓位方向估算，provider 忽略 direction，回程时间为近似值",
+    "Top5 全部缺少入口坐标，导航终点回退到水体中心（已显著提示，方案 C 待试点反馈）",
+    "evaluated 仅计精算候选且命中 limit 后提前停止，unevaluated 口径需在试点说明中解释",
+    "仅验证杭州起点；真实模式未做 P95 压测",
+    "钓位问句真实耗时 20–51s，已加 3s 慢加载提示，仍需观察等待焦虑",
+    "Key 曾在群聊明文出现，联调结束应轮换",
+    "evaluated 提前停止导致 50km 默认也显示未评估 31，需人类确认默认半径与文案"
+  ]
+}

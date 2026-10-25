@@ -1,0 +1,80 @@
+{
+  "health": {
+    "status": "ok",
+    "elapsed_s": 0.05,
+    "version": "0.1.0",
+    "mock_mode": false
+  },
+  "fish_activity": {
+    "status": 200,
+    "elapsed_s": 1.31,
+    "score": 94
+  },
+  "spots_50km": {
+    "status": 200,
+    "elapsed_s": 14.51,
+    "filtered": {
+      "total_candidates": 49,
+      "forbidden": 0,
+      "unavailable": 0,
+      "over_two_hours": 0,
+      "eligible": 10,
+      "returned": 5,
+      "truncated_by_limit": 5,
+      "evaluated": 10,
+      "unevaluated": 39
+    },
+    "top5": [
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "round_trip": 1144
+      },
+      {
+        "name": "府河",
+        "water_type": "河流",
+        "round_trip": 1236
+      },
+      {
+        "name": "锦江",
+        "water_type": "河流",
+        "round_trip": 1986
+      },
+      {
+        "name": "西郊河",
+        "water_type": "河流",
+        "round_trip": 2006
+      },
+      {
+        "name": "东湖",
+        "water_type": "湖泊",
+        "round_trip": 2122
+      }
+    ]
+  },
+  "agent_chat": {
+    "status": 200,
+    "elapsed_s": 23.62,
+    "mode": "llm",
+    "tool_calls": [
+      {
+        "name": "get_fish_activity",
+        "args": {
+          "lat": 30.657,
+          "lon": 104.066
+        },
+        "status": "ok"
+      },
+      {
+        "name": "recommend_spots",
+        "args": {
+          "lat": 30.657,
+          "lon": 104.066
+        },
+        "status": "ok"
+      }
+    ],
+    "reply": "当前鱼情评分94，档位极佳，关键因子是气压缓降、微风增氧，全天可钓，优先日出窗口05:39–08:39和日落窗口16:26–18:26。天府广场附近可优先考虑锦江，单程约9分钟、往返约19分钟，综合评分93.4，距离近且鱼口条件好；其次是府河，单程约10分钟、往返约20分钟，综合评分93.2；西郊河单程约16分钟、往返约32分钟，综合评分91.4，可作为备选。数据中仅返回3个可用钓点，无法凑足5个推荐，不建议为凑数选更远水域。水层可先钓1.5–2米浅滩，无口再转3米以上；本次无风险提示。"
+  },
+  "failures": []
+}

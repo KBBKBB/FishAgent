@@ -720,3 +720,207 @@ async def test_mock_provider_is_deterministic_bounded_and_samples_empty():
         assert len(set(row)) == len(row), "Mock 行内鱼种不得重复"
         if row:
             assert 1 <= len(row) <= 3
+
+
+def _bing_html(snippets):
+    """Build a minimal Bing SERP with one result block per (title, snippet)."""
+    blocks = "".join(
+        f'<li class="b_algo"><h2><a href="https://example.com/{i}">{title}</a></h2><p>{snippet}</p></li>'
+        for i, (title, snippet) in enumerate(snippets)
+    )
+    return f"<html><body><ol>{blocks}</ol></body></html>"
+
+
+def test_bing_provider_matches_species_from_snippets():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    snippets = [
+        ("千岛湖钓鱼攻略", "本水域盛产鲢鳙、鲫鱼和鲤鱼，野钓效果不错"),
+        ("千岛湖鱼情", "主钓翘嘴与马口，偶尔上鲤鱼"),
+    ]
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    raw = provider._match_species(provider._extract_snippets(_bing_html(snippets)))
+
+    # Aliases and canonical names both resolve through normalize_species.
+    from fishagent.core.species import normalize_species
+
+    # limit=10 here: the default cap of 4 belongs to the API layer, and this
+    # test checks the matcher, not the truncation.
+    result = normalize_species(raw, limit=10)
+    assert set(result) <= set(KNOWN_SPECIES)
+    assert "鲢鳙" in result and "鲫鱼" in result and "鲤鱼" in result
+    assert "翘嘴" in result and "马口" in result
+    assert len(result) == len(set(result))
+
+
+def test_bing_provider_returns_empty_when_no_species_mentioned():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+    html = _bing_html([("青山小说", "一部修仙小说，与钓鱼无关")])
+    assert provider._match_species(provider._extract_snippets(html)) == []
+
+
+def test_bing_provider_uses_http_client(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    captured = {"url": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            text=_bing_html(
+                [("千岛湖钓鱼", "这里鲫鱼、鲤鱼很多，偶尔能钓到鲢鳙")]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    # Inject the mock transport by creating the client ourselves and calling
+    # the private lookup so the test does not hit the real network.
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="千岛湖"))
+
+    result = asyncio.run(run())
+    assert captured["url"].startswith("https://cn.bing.com/search?q=")
+    # The query is percent-encoded on the wire.
+    assert "%E5%8D%83%E5%B2%9B%E6%B9%96" in captured["url"]  # 千岛湖
+    assert set(result) <= set(KNOWN_SPECIES)
+    assert {"鲫鱼", "鲤鱼", "鲢鳙"} <= set(result)
+
+
+def test_bing_provider_returns_empty_on_captcha(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>百度安全验证 wappass.baidu.com</html>")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_returns_empty_on_non_200(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_returns_empty_on_network_error(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated network failure")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_skips_blank_name():
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    # SpotSpeciesQuery rejects a blank name, so build a stand-in that only
+    # exposes the field the provider reads.
+    blank = SimpleNamespace(name="   ")
+
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await provider._lookup_one(client, blank)
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_respects_max_results():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    snippets = [("水域", "鲫鱼")] * 20
+    provider = BingSpeciesProvider(timeout_seconds=5.0, max_results=3)
+    snippets_out = provider._extract_snippets(_bing_html(snippets))
+    # 2 texts per block (title + snippet), 3 blocks max -> 6 texts.
+    assert len(snippets_out) == 6
+
+
+def test_bing_provider_declares_its_own_disclosure():
+    """The Bing adapter must not reuse Xiaohongshu wording in its response."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    assert provider.source_key == "bing"
+    assert "Bing" in provider.source_label
+    assert "小红书" not in provider.found_note
+    assert "小红书" not in provider.source_disclosure
+    assert "仅供参考" in provider.found_note
+    assert "仅供参考" in provider.source_disclosure
+
+
+def test_service_uses_provider_specific_source_metadata(client, override_provider):
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+
+    async def fake_find_species(spots):
+        return [["鲫鱼"] for _ in spots]
+
+    provider.find_species = fake_find_species  # type: ignore[method-assign]
+    override_provider(provider)
+
+    payload = request_species(client, [{"spot_id": "p1", "name": "千岛湖"}]).json()
+    item = payload["results"][0]
+
+    assert item["source"] == "bing"
+    assert item["source_label"] == provider.source_label
+    assert item["note"] == provider.found_note
+    assert payload["source_disclosure"] == provider.source_disclosure
+    assert payload["provider"] == "bing"
+
+
+def test_species_provider_selection_includes_bing():
+    import fishagent.deps as deps_mod
+    from fishagent.config import Settings
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    original = deps_mod.get_settings
+    settings = Settings(species_provider="bing", mock_mode=False)
+    try:
+        deps_mod.get_settings = lambda: settings
+        provider = deps_mod.get_species_provider()
+        assert isinstance(provider, BingSpeciesProvider)
+    finally:
+        deps_mod.get_settings = original

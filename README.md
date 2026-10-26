@@ -61,6 +61,7 @@ cd backend
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容 LLM 配置；DeepSeek 示例：`https://api.deepseek.com/v1` + `deepseek-chat`；缺省走兜底路由 |
 | `FISHAGENT_SPECIES_PROVIDER` | `mock` / `bing` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`（不伪造社区数据）；`bing` 用 Bing 搜索结果匹配鱼种（Phase 1） |
 | `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | 鱼种查询超时，默认 4 秒；超时只降级该行展示 |
+| `FISHAGENT_SPECIES_PAGE_FETCH` | `true` 时抓取搜索结果页正文补充鱼种（Phase 2）；有 `LLM_API_KEY` 时同时启用 LLM 抽取 |
 | `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | 鱼种结果缓存秒数，默认 3600 |
 
 真实 Key 不随仓库分发；前端产物中不得出现任何 Key。

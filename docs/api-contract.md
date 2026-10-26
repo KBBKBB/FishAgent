@@ -79,6 +79,7 @@ fixtures/                         # 小产：演示场景
 | `FISHAGENT_SPECIES_PROVIDER` | 空 | `mock` / `bing` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`；`bing` 走 Bing 搜索（Phase 1，见 4.6）；未知值告警后按 `none` |
 | `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | `4.0` | 鱼种查询超时，范围 0 < x ≤ 30 |
 | `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | `3600` | 鱼种结果缓存秒数，范围 0–86400；0 表示不读不写缓存 |
+| `FISHAGENT_SPECIES_PAGE_FETCH` | `false` | 是否抓取搜索结果页正文（Phase 2）；无 LLM Key 时仅做白名单匹配 |
 
 `.env.example` 只放占位符，严禁真实密钥入库。
 
@@ -353,6 +354,7 @@ fixtures/                         # 小产：演示场景
 - `FISHAGENT_SPECIES_PROVIDER`：`mock` / `bing` / `none` / `disabled`。留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none`。
 - **`bing` Provider（Phase 1）**：以「{水域名} 钓鱼」两词查询 cn.bing，只解析结果页的标题与摘要，用 `core/species.py` 的白名单与别名做匹配；不抓取目标页正文、不调用 LLM、不使用 Cookie。命中则返回鱼种，未命中或遭遇验证码/非 200/网络异常时返回空列表（`has_recommendation=false`）。因此召回率取决于 Bing 是否收录该水域的钓鱼内容，`source_label` 为「Bing 搜索（仅供参考）」。
   - 已知限制：cn.bing 对长查询和多词查询会退化为只匹配首个专有名词（如「青山水库」命中小说《青山》、「千岛湖」命中「千岛 App」）；`site:xiaohongshu.com` 在 cn.bing 上无效且小红书内容几乎无收录。真实小红书检索需官方或授权数据源。
+  - **Phase 2（`FISHAGENT_SPECIES_PAGE_FETCH=true`）**：当摘要命中不足 2 个鱼种时，抓取前若干个结果页正文，先做白名单匹配，再（若配置了 `LLM_API_KEY`）由 LLM 抽取。预算按**请求**而非钓位计算：每请求最多抓 6 页、最多 4 次 LLM 调用，单页正文最多取 4000 字符送模型。抓取受 SSRF 防护约束：仅允许 http(s)、仅允许解析到公网地址、拒绝 localhost/私网/链路本地/保留地址，单页最多 512KB。百科、问答、搜索引擎自身等噪声域名跳过。任一页面失败只影响该页，不影响整批。
   - 合规：仅读取公开搜索结果页；展示时必须保留来源标识与「仅供参考」。
 - **配额异常口径（2026-10-25 裁决）**：Provider 配额耗尽按本节降级为 200（不返回 429）；`providers/base.py` 中「配额异常应返回 429」的通用注释不适用于本端点。
 - 前端必须标注来源与“仅供参考”，不得承诺渔获；`degraded=true` 时文案必须与「暂无相关鱼种推荐」区分（如「鱼种信息暂不可用，仅供参考」）。

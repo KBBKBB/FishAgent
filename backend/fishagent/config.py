@@ -82,6 +82,12 @@ class Settings(BaseSettings):
         le=86_400,
         validation_alias="FISHAGENT_SPECIES_CACHE_TTL_SECONDS",
     )
+    # Phase 2: fetch top result pages and let the LLM extract species. Off by
+    # default so Phase 1 behaviour (snippet matching only) stays the baseline.
+    species_page_fetch_enabled: bool = Field(
+        default=False,
+        validation_alias="FISHAGENT_SPECIES_PAGE_FETCH",
+    )
 
     # CR-03 pilot access. Every field below is inert unless
     # FISHAGENT_PUBLIC_ACCESS_ENABLED=true, so the S1 deployment is unchanged.

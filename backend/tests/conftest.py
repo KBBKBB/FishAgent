@@ -15,10 +15,14 @@ REPO_ROOT = BACKEND_ROOT.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-# QA runs are deterministic and must never touch real providers.
+# QA runs are deterministic and must never touch real providers. These are set
+# before any settings import so a developer's backend/.env cannot leak in and
+# make the suite query live search engines.
 os.environ["FISHAGENT_MOCK_MODE"] = "true"
 os.environ["AMAP_WEB_KEY"] = ""
 os.environ["LLM_API_KEY"] = ""
+os.environ["FISHAGENT_SPECIES_PROVIDER"] = ""
+os.environ["FISHAGENT_SPECIES_PAGE_FETCH"] = "false"
 
 HANGZHOU = {"lat": 30.2741, "lon": 120.1551}
 BEIJING = {"lat": 39.915, "lon": 116.404}

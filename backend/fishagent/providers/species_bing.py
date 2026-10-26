@@ -32,10 +32,16 @@ _MAX_RESULTS = 8
 # Phase 2 budget: page fetches and LLM calls are the expensive part, so they are
 # capped per request rather than per spot.
 _MAX_PAGE_FETCHES = 6
-_MAX_LLM_CALLS = 4
+# Each LLM call is sequential and costs ~1s, so the budget is bounded by the
+# endpoint timeout (4s) minus search and page-fetch time. Two calls keep the
+# worst case inside the window; the per-page whitelist pass still runs on all
+# fetched pages, so less LLM coverage costs little recall.
+_MAX_LLM_CALLS = 2
 _MAX_PAGE_CHARS_FOR_LLM = 4000
 # Two snippet hits already fill a typical card; no need to spend pages on it.
 _SNIPPET_SUFFICIENT_HITS = 2
+# The API caps a spot at 4 species, so collecting more is wasted work.
+_MAX_RESULT_SPECIES = 4
 _PAGE_CONCURRENCY = 3
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -175,6 +181,10 @@ class BingSpeciesProvider:
             for species in self._match_species([text]):
                 if species not in result and species not in page_hits:
                     page_hits.append(species)
+            # Skip the LLM entirely once the page already filled a card: the call
+            # costs seconds and cannot improve a full result set.
+            if len(result) + len(page_hits) >= _MAX_RESULT_SPECIES:
+                break
             # LLM extraction only runs for the leftovers, and only when configured.
             if self._extractor is None or llm_budget <= 0:
                 continue

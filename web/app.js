@@ -1224,7 +1224,8 @@
     node.removeAttribute('data-empty');
     node.append(el('span', 'spot-species-label', '推荐鱼种：'));
     node.append(document.createTextNode(species.join('、')));
-    var label = result.source_label || '小红书';
+    // Provider-agnostic fallback: the backend decides the source wording.
+    var label = result.source_label || '网络公开信息';
     node.append(el('span', 'spot-species-source', '来源：' + label + ' · 仅供参考'));
   }
 

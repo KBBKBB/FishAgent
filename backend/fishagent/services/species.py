@@ -25,6 +25,8 @@ SOURCE_DISCLOSURE = (
 )
 FOUND_NOTE = "来自小红书网友分享，仅供参考"
 EMPTY_NOTE = "暂无相关鱼种推荐"
+# Providers may override presentation; these match the Xiaohongshu contract.
+_DEFAULT_SOURCE_KEY = "xiaohongshu"
 _EMPTY_CACHE_TTL_SECONDS = 300
 _MAX_CACHE_ENTRIES = 2_000
 
@@ -215,6 +217,12 @@ async def build_species_recommendations(
         settings.species_cache_ttl_seconds,
     )
 
+    # Providers declare their own presentation; fall back to the Xiaohongshu
+    # wording so older adapters keep working unchanged.
+    source_key = getattr(provider, "source_key", _DEFAULT_SOURCE_KEY) or _DEFAULT_SOURCE_KEY
+    found_note = getattr(provider, "found_note", FOUND_NOTE) or FOUND_NOTE
+    disclosure = getattr(provider, "source_disclosure", SOURCE_DISCLOSURE) or SOURCE_DISCLOSURE
+
     results: list[SpotSpeciesResult] = []
     for spot, key in zip(spots, keys):
         # Degraded responses are all-empty by contract: never surface cache hits.
@@ -226,9 +234,9 @@ async def build_species_recommendations(
                 spot_name=spot.name,
                 species=species,
                 has_recommendation=has_recommendation,
-                source="xiaohongshu" if has_recommendation else "none",
+                source=source_key if has_recommendation else "none",
                 source_label=provider.source_label if has_recommendation else "",
-                note=FOUND_NOTE if has_recommendation else EMPTY_NOTE,
+                note=found_note if has_recommendation else EMPTY_NOTE,
             )
         )
 
@@ -236,6 +244,6 @@ async def build_species_recommendations(
         results=results,
         provider=provider.name,
         degraded=degraded,
-        source_disclosure=SOURCE_DISCLOSURE,
+        source_disclosure=disclosure,
         generated_at=utc_timestamp(),
     )

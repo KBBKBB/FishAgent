@@ -70,6 +70,11 @@ class SpeciesProvider(Protocol):
 
     name: str
     source_label: str
+    # Optional presentation metadata. When omitted the service falls back to the
+    # Xiaohongshu wording so existing adapters keep their contract.
+    source_key: str
+    found_note: str
+    source_disclosure: str
 
     async def find_species(
         self,

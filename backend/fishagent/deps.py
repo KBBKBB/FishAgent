@@ -16,6 +16,7 @@ from fishagent.providers.amap import AMapGeoProvider
 from fishagent.providers.amap_mock import MockGeoProvider
 from fishagent.providers.base import GeoProvider, SpeciesProvider, WeatherProvider
 from fishagent.providers.open_meteo import OpenMeteoWeatherProvider
+from fishagent.providers.species_bing import BingSpeciesProvider
 from fishagent.providers.species_mock import MockSpeciesProvider
 from fishagent.providers.species_none import NullSpeciesProvider
 from fishagent.providers.weather_mock import MockWeatherProvider
@@ -58,6 +59,8 @@ def get_species_provider() -> SpeciesProvider:
         return MockSpeciesProvider() if settings.mock_mode else NullSpeciesProvider()
     if choice == "mock":
         return MockSpeciesProvider()
+    if choice == "bing":
+        return BingSpeciesProvider(timeout_seconds=settings.species_timeout_seconds)
     if choice in ("none", "disabled"):
         return NullSpeciesProvider()
     logger.warning("unknown FISHAGENT_SPECIES_PROVIDER=%s; using none", choice)

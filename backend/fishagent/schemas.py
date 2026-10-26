@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 Impact = Literal["positive", "neutral", "negative"]
 AlertLevel = Literal["danger", "warning", "info"]
 EntryPrecision = Literal["entr_location", "center_fallback"]
-SpeciesSource = Literal["xiaohongshu", "none"]
+SpeciesSource = Literal["xiaohongshu", "bing", "none"]
 
 
 class LatLon(BaseModel):

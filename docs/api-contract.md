@@ -76,7 +76,7 @@ fixtures/                         # 小产：演示场景
 | `LLM_TIMEOUT_SECONDS` | `30` | LLM 超时 |
 | `FISHAGENT_AMAP_CONCURRENCY` | `6` | 真实模式召回与路径规划并发上限 |
 | `FISHAGENT_AMAP_QPS` | `2` | 真实模式请求起间隔（秒） |
-| `FISHAGENT_SPECIES_PROVIDER` | 空 | `mock` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none` |
+| `FISHAGENT_SPECIES_PROVIDER` | 空 | `mock` / `bing` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`；`bing` 走 Bing 搜索（Phase 1，见 4.6）；未知值告警后按 `none` |
 | `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | `4.0` | 鱼种查询超时，范围 0 < x ≤ 30 |
 | `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | `3600` | 鱼种结果缓存秒数，范围 0–86400；0 表示不读不写缓存 |
 
@@ -350,7 +350,10 @@ fixtures/                         # 小产：演示场景
 - **降级语义**：Provider 超时、抛异常（含配额异常）、返回结构异常时，一律返回 200 + **全部空结果** + `degraded=true`；不得返回 5xx。结构异常包括：外层非 list、行数与本次实际查询数（缓存未命中项数）不符、单行不是 list/tuple。降级响应不得混入缓存中的非空结果。
 - **取消传播**：`asyncio.CancelledError` 必须向上传播，不得被降级逻辑吞掉。
 - **缓存**：进程内按归一化 `(name, water_type)` 元组缓存，重启清空、多 worker 不共享；成功非空结果 TTL 为 `FISHAGENT_SPECIES_CACHE_TTL_SECONDS`（默认 3600），空结果与降级结果 TTL 为 `min(TTL, 300)`；降级结果同样写入负缓存，避免上游故障时逐请求重打；TTL=0 时不读不写；缓存条目上限 2000，超限先清过期再全清。
-- `FISHAGENT_SPECIES_PROVIDER`：`mock` / `none` / `disabled`。留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none`；真实小红书适配器实现 `SpeciesProvider` 后在此注册。
+- `FISHAGENT_SPECIES_PROVIDER`：`mock` / `bing` / `none` / `disabled`。留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none`。
+- **`bing` Provider（Phase 1）**：以「{水域名} 钓鱼」两词查询 cn.bing，只解析结果页的标题与摘要，用 `core/species.py` 的白名单与别名做匹配；不抓取目标页正文、不调用 LLM、不使用 Cookie。命中则返回鱼种，未命中或遭遇验证码/非 200/网络异常时返回空列表（`has_recommendation=false`）。因此召回率取决于 Bing 是否收录该水域的钓鱼内容，`source_label` 为「Bing 搜索（仅供参考）」。
+  - 已知限制：cn.bing 对长查询和多词查询会退化为只匹配首个专有名词（如「青山水库」命中小说《青山》、「千岛湖」命中「千岛 App」）；`site:xiaohongshu.com` 在 cn.bing 上无效且小红书内容几乎无收录。真实小红书检索需官方或授权数据源。
+  - 合规：仅读取公开搜索结果页；展示时必须保留来源标识与「仅供参考」。
 - **配额异常口径（2026-10-25 裁决）**：Provider 配额耗尽按本节降级为 200（不返回 429）；`providers/base.py` 中「配额异常应返回 429」的通用注释不适用于本端点。
 - 前端必须标注来源与“仅供参考”，不得承诺渔获；`degraded=true` 时文案必须与「暂无相关鱼种推荐」区分（如「鱼种信息暂不可用，仅供参考」）。
 

@@ -217,8 +217,15 @@
 
 - 后端：`SpeciesProvider` 协议；`MockSpeciesProvider`（确定性、覆盖有/无推荐两条路径）与 `NullSpeciesProvider`；`POST /api/spots/species`；鱼种别名归一、白名单、去重、单钓位最多 4 个；按归一化 `(name, water_type)` 元组缓存（成功 3600s，空/降级 `min(TTL, 300)`）；超时/异常/异常载荷降级为 200 + **全部空结果** + `degraded=true`。
 - H5：钓位卡新增“推荐鱼种：…”行，附来源与“仅供参考”；先渲染钓位、后异步补齐；空结果显示“暂无相关鱼种推荐”；鱼种请求 4.5s 超时、401 不全局跳转、空名钓位过滤、按 `spot_id` 映射，降级文案与空结果区分。
-- 配置：`FISHAGENT_SPECIES_PROVIDER`（`mock` / `none` / `disabled`）、`FISHAGENT_SPECIES_TIMEOUT_SECONDS`、`FISHAGENT_SPECIES_CACHE_TTL_SECONDS`。
+- 配置：`FISHAGENT_SPECIES_PROVIDER`（`mock` / `bing` / `none` / `disabled`）、`FISHAGENT_SPECIES_TIMEOUT_SECONDS`、`FISHAGENT_SPECIES_CACHE_TTL_SECONDS`。
 - 非范围：真实小红书抓取（需 Cookie 或第三方授权）、Agent 对话引用鱼种、按用户个性化、鱼获数据。
+
+**数据源调研（2026-10-26）**
+
+- `astron-xiaohongshu-mcp 0.1.5` 实测：仅暴露 5 个工具，搜索函数未注册为 MCP 工具；游客态搜索页 HTML 无笔记数据（0 条），无法按钓位检索小红书。另 `mcp>=2` 会导致 `mcp.server.fastmcp` 缺失，需手动降级 `mcp<2`。
+- 百度：requests 与 headless Chrome 访问均强制跳转图形验证码，无法自动检索。
+- Bing：可用，但 `site:xiaohongshu.com` 无效、小红书内容几乎无收录；对多词查询会退化为只匹配首个专有名词。
+- 结论：改用 **Bing 结果摘要 + 白名单匹配**（Phase 1），不抓正文、不依赖 LLM。
 
 **验收**
 

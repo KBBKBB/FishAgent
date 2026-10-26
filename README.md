@@ -59,7 +59,7 @@ cd backend
 | `FISHAGENT_AMAP_QPS` | 真实模式请求起间隔上限，默认 2（按高德配额调整） |
 | `OPEN_METEO_BASE_URL` | 默认 `https://api.open-meteo.com/v1` |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容 LLM 配置；DeepSeek 示例：`https://api.deepseek.com/v1` + `deepseek-chat`；缺省走兜底路由 |
-| `FISHAGENT_SPECIES_PROVIDER` | `mock` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`（不伪造社区数据） |
+| `FISHAGENT_SPECIES_PROVIDER` | `mock` / `bing` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`（不伪造社区数据）；`bing` 用 Bing 搜索结果匹配鱼种（Phase 1） |
 | `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | 鱼种查询超时，默认 4 秒；超时只降级该行展示 |
 | `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | 鱼种结果缓存秒数，默认 3600 |
 

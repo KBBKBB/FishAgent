@@ -78,6 +78,21 @@ class Settings(BaseSettings):
         le=2048,
         validation_alias="FISHAGENT_IDENTIFY_MAX_SIDE",
     )
+    # Pixel ceiling. This was the value behind the 2026-10-27 outage: hardcoded
+    # at 40 MP it rejected 48 MP iPhone photos. It must stay tunable so a new
+    # camera resolution never needs a code change to be accepted.
+    identify_max_image_pixels: int = Field(
+        default=80_000_000,
+        ge=1_000_000,
+        le=500_000_000,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_IMAGE_PIXELS",
+    )
+    identify_jpeg_quality: int = Field(
+        default=85,
+        ge=30,
+        le=95,
+        validation_alias="FISHAGENT_IDENTIFY_JPEG_QUALITY",
+    )
     identify_timeout_seconds: float = Field(
         default=60.0,
         ge=5,
@@ -92,6 +107,15 @@ class Settings(BaseSettings):
         ge=256,
         le=8192,
         validation_alias="FISHAGENT_IDENTIFY_DECODE_MEMORY_BUDGET_MB",
+    )
+    # Bytes of RAM per decoded pixel, used to price a decode before running it.
+    # Measured at ~7.3 on this host; exposed because the true ratio depends on
+    # the Pillow/libheif build, so a different deployment may need its own.
+    identify_decode_bytes_per_pixel: float = Field(
+        default=7.5,
+        ge=1.0,
+        le=32.0,
+        validation_alias="FISHAGENT_IDENTIFY_DECODE_BYTES_PER_PIXEL",
     )
     # A separate cap because decoding is CPU-bound (~1 s for 48 MP on one core);
     # memory headroom alone would let many small photos thrash the CPU.

@@ -123,8 +123,11 @@ async def identify_fish(
         image,
         max_upload_bytes=settings.identify_max_upload_bytes,
         max_side=settings.identify_max_side,
+        max_image_pixels=settings.identify_max_image_pixels,
+        jpeg_quality=settings.identify_jpeg_quality,
         max_concurrent_decodes=settings.identify_max_concurrent_decodes,
         decode_memory_budget_mb=settings.identify_decode_memory_budget_mb,
+        decode_bytes_per_pixel=settings.identify_decode_bytes_per_pixel,
     )
 
     if settings.mock_mode:

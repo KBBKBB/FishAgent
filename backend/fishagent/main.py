@@ -19,6 +19,7 @@ from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
 from fishagent.api.spots import router as spots_router
 from fishagent.config import get_settings
+from fishagent.core.image_guard import sync_pillow_limits
 from fishagent.errors import ApiError, register_exception_handlers
 from fishagent.pilot import get_pilot_state
 from fishagent.pilot.middleware import PilotAccessMiddleware, quota_exceeded_handler
@@ -95,6 +96,9 @@ def _agent_router() -> APIRouter:
 
 def create_app() -> FastAPI:
     _configure_logging()
+    # Pillow's bomb threshold is a process global, so it is set once here from
+    # settings rather than mutated per upload (concurrent requests would race).
+    sync_pillow_limits(get_settings().identify_max_image_pixels)
     app = FastAPI(
         title="FishAgent API",
         version=__version__,

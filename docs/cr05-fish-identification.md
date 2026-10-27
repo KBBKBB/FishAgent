@@ -98,7 +98,7 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 1. 读入上限 `max_upload_bytes`，超限直接 413（读取时即截断，不整体载入内存）。
 2. 用 Pillow 实际解码校验，不信任 `Content-Type` 与扩展名：
    - 仅接受 JPEG / PNG / WEBP / GIF / HEIF / AVIF。其中 HEIF（即 iPhone 的 HEIC）与 AVIF 由 `pillow-heif` 提供解码能力——Safari 在上传时不保证转码，从「文件」App 选取的照片可能原样送达，因此必须由服务端直接支持。
-   - 设置 `Image.MAX_IMAGE_PIXELS = 80_000_000` 防解压炸弹，超限返回 **413 `IMAGE_TOO_LARGE`（不是 415）**，`message` 带具体尺寸
+   - 上限取自 `FISHAGENT_IDENTIFY_MAX_IMAGE_PIXELS`（默认 8000 万像素）；Pillow 的进程级 `Image.MAX_IMAGE_PIXELS` 在**应用启动时**由 `sync_pillow_limits` 同步一次，不在请求中修改（并发请求会竞争全局状态）。超限返回 **413 `IMAGE_TOO_LARGE`（不是 415）**，`message` 带具体尺寸
    - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
    - **上限教训（2026-10-27 实故障）**：上限原为 4000 万像素，导致 iPhone Pro 的 48MP 照片（8064×6048 = 4880 万像素）被直接拒掉，全景照片（10800×4000）同样。iPhone 各档位实测：12MP / 24MP / 48MP 分别是 1220 万 / 2447 万 / 4877 万像素。现调到 8000 万像素，覆盖到 48MP 与全景仍有余量。
    - **内存代价（全分辨率解码，`draft()` 对 HEIF 无效）**：12MP≈91 MB、24MP≈179 MB、48MP≈356 MB、72MP≈524 MB 峰值 RSS。上限同时也是内存边界，调整前须重测。
@@ -140,8 +140,13 @@ System prompt 要求模型输出：
 | `FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES` | `8388608` | 64 KiB–20 MiB |
 | `FISHAGENT_IDENTIFY_MAX_SIDE` | `1280` | 256–2048 |
 | `FISHAGENT_IDENTIFY_TIMEOUT_SECONDS` | `60.0` | 5–180 |
+| `FISHAGENT_IDENTIFY_MAX_IMAGE_PIXELS` | `80000000` | 1e6–5e8 |
+| `FISHAGENT_IDENTIFY_JPEG_QUALITY` | `85` | 30–95 |
 | `FISHAGENT_IDENTIFY_DECODE_MEMORY_BUDGET_MB` | `1536` | 256–8192 |
 | `FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES` | `4` | 1–8 |
+| `FISHAGENT_IDENTIFY_DECODE_BYTES_PER_PIXEL` | `7.5` | 1.0–32.0 |
+
+**所有限制都必须可配置，不得写死在 `image_guard.py`**。这是从 2026-10-27 故障得到的直接教训：像素上限写死为 4000 万，导致 iPhone 的 48MP 照片被静默拒绝，且支持新相机分辨率需要改代码。`image_guard` 只保留与配置无关的常量（分块读取大小、接受的格式集合）。
 
 ## 6. 前端（`web/`）
 

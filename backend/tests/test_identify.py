@@ -18,10 +18,10 @@ from conftest import assert_unified_error
 from PIL import Image
 
 from fishagent.api.identify import PLACEHOLDER_SPECIES, _is_placeholder, _to_response
+from fishagent.config import get_settings
 from fishagent.core.image_guard import (
     _HEIF_AVAILABLE,
     ACCEPTED_FORMATS,
-    MAX_IMAGE_PIXELS,
     _DecodeAdmission,
     decode_and_normalize,
     prepare_image,
@@ -33,6 +33,24 @@ from fishagent.providers.vision_fish import VisionFish, VisionFishIdentifier, _p
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def normalize(data: bytes, *, max_side: int = 1280, max_image_pixels: int | None = None,
+              jpeg_quality: int | None = None):
+    """Call decode_and_normalize with the configured defaults.
+
+    Every limit now comes from Settings, so the tests exercise the real
+    defaults instead of repeating the numbers here.
+    """
+    settings = get_settings()
+    return decode_and_normalize(
+        data,
+        max_side=max_side,
+        max_image_pixels=(
+            settings.identify_max_image_pixels if max_image_pixels is None else max_image_pixels
+        ),
+        jpeg_quality=settings.identify_jpeg_quality if jpeg_quality is None else jpeg_quality,
+    )
 
 
 def _png(size: tuple[int, int] = (120, 90), mode: str = "RGB") -> bytes:
@@ -104,7 +122,7 @@ def test_decode_strips_exif_and_gps():
     assert 34853 in source.getexif()
     source.close()
 
-    jpeg, media_type = decode_and_normalize(_jpeg_with_gps(), max_side=1280)
+    jpeg, media_type = normalize(_jpeg_with_gps(), max_side=1280)
 
     assert media_type == "image/jpeg"
     result = Image.open(io.BytesIO(jpeg))
@@ -115,7 +133,7 @@ def test_decode_strips_exif_and_gps():
 
 
 def test_decode_downscales_long_side_but_keeps_aspect():
-    jpeg, _ = decode_and_normalize(_png((400, 200)), max_side=100)
+    jpeg, _ = normalize(_png((400, 200)), max_side=100)
     image = Image.open(io.BytesIO(jpeg))
     assert max(image.size) == 100
     assert image.size[0] > image.size[1], "aspect ratio must be preserved"
@@ -123,7 +141,7 @@ def test_decode_downscales_long_side_but_keeps_aspect():
 
 
 def test_decode_does_not_upscale_small_images():
-    jpeg, _ = decode_and_normalize(_png((80, 60)), max_side=1280)
+    jpeg, _ = normalize(_png((80, 60)), max_side=1280)
     image = Image.open(io.BytesIO(jpeg))
     assert image.size == (80, 60)
     image.close()
@@ -131,20 +149,20 @@ def test_decode_does_not_upscale_small_images():
 
 def test_decode_trusts_pillow_not_the_extension():
     """A real PNG must pass even though nothing told us it was a PNG."""
-    jpeg, _ = decode_and_normalize(_png(), max_side=1280)
+    jpeg, _ = normalize(_png(), max_side=1280)
     assert jpeg[:2] == b"\xff\xd8", "output must be a real JPEG regardless of input"
 
 
 def test_decode_rejects_non_images():
     with pytest.raises(ApiError) as excinfo:
-        decode_and_normalize(b"this is not an image at all", max_side=1280)
+        normalize(b"this is not an image at all", max_side=1280)
     assert excinfo.value.status_code == 415
 
 
 def test_decode_rejects_truncated_image():
     truncated = _png()[:40]
     with pytest.raises(ApiError) as excinfo:
-        decode_and_normalize(truncated, max_side=1280)
+        normalize(truncated, max_side=1280)
     assert excinfo.value.status_code == 415
 
 
@@ -155,7 +173,7 @@ def test_decode_rejects_unlisted_formats(fmt):
     image.save(buffer, format=fmt)
     image.close()
     with pytest.raises(ApiError) as excinfo:
-        decode_and_normalize(buffer.getvalue(), max_side=1280)
+        normalize(buffer.getvalue(), max_side=1280)
     assert excinfo.value.status_code == 415
 
 
@@ -175,7 +193,7 @@ def test_decode_accepts_heif_family(fmt):
     """iPhones shoot HEIC; Safari does not always transcode on upload."""
     if not _HEIF_AVAILABLE:
         pytest.skip("pillow-heif not installed")
-    jpeg, media_type = decode_and_normalize(_heif_bytes(fmt), max_side=1280)
+    jpeg, media_type = normalize(_heif_bytes(fmt), max_side=1280)
     assert media_type == "image/jpeg"
     result = Image.open(io.BytesIO(jpeg))
     assert result.format == "JPEG"
@@ -195,7 +213,7 @@ def test_decode_heic_strips_exif():
     image.save(buffer, format="HEIF", exif=exif)
     image.close()
 
-    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    jpeg, _ = normalize(buffer.getvalue(), max_side=1280)
     result = Image.open(io.BytesIO(jpeg))
     assert dict(result.getexif()) == {}
     result.close()
@@ -212,7 +230,7 @@ def test_decode_multiframe_heic_takes_first_frame():
     for frame in frames:
         frame.close()
 
-    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    jpeg, _ = normalize(buffer.getvalue(), max_side=1280)
     result = Image.open(io.BytesIO(jpeg))
     assert result.size == (200, 150)
     result.close()
@@ -244,13 +262,14 @@ def test_identify_endpoint_accepts_heic_upload(client):
 
 def test_decode_rejects_decompression_bomb():
     """Pixel count alone must reject, well below Pillow's 2x hard-error line."""
-    image = Image.new("L", (12000, 8000), 0)  # 96 MP > 80 MP cap
+    cap = get_settings().identify_max_image_pixels
+    image = Image.new("L", (12000, 8000), 0)  # 96 MP
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     image.close()
-    assert 12000 * 8000 > MAX_IMAGE_PIXELS
+    assert 12000 * 8000 > cap
     with pytest.raises(ApiError) as excinfo:
-        decode_and_normalize(buffer.getvalue(), max_side=1280)
+        normalize(buffer.getvalue(), max_side=1280)
     assert excinfo.value.status_code == 413
     assert excinfo.value.code == "IMAGE_TOO_LARGE"
 
@@ -266,7 +285,7 @@ def test_oversize_is_not_reported_as_an_unsupported_format():
     image.save(buffer, format="PNG")
     image.close()
     with pytest.raises(ApiError) as excinfo:
-        decode_and_normalize(buffer.getvalue(), max_side=1280)
+        normalize(buffer.getvalue(), max_side=1280)
     assert excinfo.value.code != "UNSUPPORTED_MEDIA_TYPE"
     assert "12000" in excinfo.value.message and "8000" in excinfo.value.message
 
@@ -282,15 +301,77 @@ def test_oversize_is_not_reported_as_an_unsupported_format():
 )
 def test_decode_accepts_every_iphone_camera_resolution(width, height, label):
     """Real iPhone outputs must pass the guard; 48 MP used to be rejected."""
-    assert width * height <= MAX_IMAGE_PIXELS, f"{label} no longer fits the cap"
+    cap = get_settings().identify_max_image_pixels
+    assert width * height <= cap, f"{label} no longer fits the cap"
     image = Image.new("RGB", (width, height), (20, 60, 90))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=45)
     image.close()
-    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    jpeg, _ = normalize(buffer.getvalue(), max_side=1280)
     result = Image.open(io.BytesIO(jpeg))
     assert max(result.size) == 1280
     result.close()
+
+
+# --- limits come from settings, not from code -------------------------------
+#
+# The 2026-10-27 outage was a hardcoded pixel ceiling rejecting 48 MP photos.
+# These assert the setting actually governs behaviour, so no future camera
+# resolution requires a code change.
+
+
+def test_pixel_ceiling_is_governed_by_the_setting():
+    """Raising the setting must make a previously rejected size decode."""
+    image = Image.new("RGB", (3000, 2500), (20, 60, 90))  # 7.5 MP
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=40)
+    image.close()
+    payload = buffer.getvalue()
+
+    with pytest.raises(ApiError) as excinfo:
+        normalize(payload, max_image_pixels=5_000_000)
+    assert excinfo.value.code == "IMAGE_TOO_LARGE"
+
+    jpeg, _ = normalize(payload, max_image_pixels=10_000_000)
+    assert jpeg[:2] == b"\xff\xd8", "raising the setting must admit the photo"
+
+
+def test_jpeg_quality_is_governed_by_the_setting():
+    """Lower quality must produce a smaller file; the constant is gone."""
+    payload = _png((900, 700), mode="RGB")
+    # A noisy gradient makes quality genuinely affect the encoded size.
+    image = Image.effect_noise((900, 700), 64).convert("RGB")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image.close()
+    payload = buffer.getvalue()
+
+    low, _ = normalize(payload, jpeg_quality=30)
+    high, _ = normalize(payload, jpeg_quality=95)
+    assert len(low) < len(high), "jpeg_quality must reach the encoder"
+
+
+def test_decode_pricing_uses_the_configured_ratio():
+    admission = _DecodeAdmission(4, budget_mb=1000, bytes_per_pixel=7.5)
+    cheap = _DecodeAdmission(4, budget_mb=1000, bytes_per_pixel=16.0)
+    assert cheap.weight_for(4032, 3024) > admission.weight_for(4032, 3024)
+
+
+def test_sync_pillow_limits_points_pillow_at_the_setting():
+    """Pillow's process-global threshold must agree with our setting.
+
+    Restores the previous value: leaving a low global behind would make every
+    later decode raise a bomb error, which is exactly the hazard of relying on
+    process-global state.
+    """
+    from fishagent.core.image_guard import sync_pillow_limits
+
+    original = Image.MAX_IMAGE_PIXELS
+    try:
+        sync_pillow_limits(12_345_678)
+        assert Image.MAX_IMAGE_PIXELS == 12_345_678
+    finally:
+        sync_pillow_limits(original)
 
 
 @pytest.mark.skipif(not _HEIF_AVAILABLE, reason="pillow-heif not installed")
@@ -300,7 +381,7 @@ def test_decode_accepts_48mp_heic():
     buffer = io.BytesIO()
     image.save(buffer, format="HEIF", quality=40)
     image.close()
-    jpeg, media_type = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    jpeg, media_type = normalize(buffer.getvalue(), max_side=1280)
     assert media_type == "image/jpeg"
     result = Image.open(io.BytesIO(jpeg))
     assert max(result.size) == 1280
@@ -313,7 +394,7 @@ def test_decode_accepts_normal_phone_photo_size():
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=70)
     image.close()
-    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    jpeg, _ = normalize(buffer.getvalue(), max_side=1280)
     result = Image.open(io.BytesIO(jpeg))
     assert max(result.size) == 1280
     result.close()
@@ -330,7 +411,7 @@ def _track_decodes(monkeypatch, gate: float = 0.05):
     """Stub decode_and_normalize to record how many run at once."""
     state = {"current": 0, "peak": 0, "calls": 0}
 
-    def fake_decode(data, *, max_side):
+    def fake_decode(data, *, max_side, max_image_pixels, jpeg_quality):
         state["calls"] += 1
         state["current"] += 1
         state["peak"] = max(state["peak"], state["current"])
@@ -355,13 +436,20 @@ def _jpeg_of(size: tuple[int, int]) -> bytes:
 
 
 def _prepare(payload: bytes, **kwargs):
+    settings = get_settings()
+    options = {
+        "max_upload_bytes": 64 * 1024 * 1024,
+        "max_side": 1280,
+        "max_image_pixels": settings.identify_max_image_pixels,
+        "jpeg_quality": settings.identify_jpeg_quality,
+        "max_concurrent_decodes": settings.identify_max_concurrent_decodes,
+        "decode_memory_budget_mb": settings.identify_decode_memory_budget_mb,
+        "decode_bytes_per_pixel": settings.identify_decode_bytes_per_pixel,
+    }
+    options.update(kwargs)
+
     async def one():
-        return await prepare_image(
-            _Upload(payload),
-            max_upload_bytes=64 * 1024 * 1024,
-            max_side=1280,
-            **kwargs,
-        )
+        return await prepare_image(_Upload(payload), **options)
 
     return one()
 
@@ -502,6 +590,11 @@ def test_oversized_upload_never_claims_a_decode_slot(monkeypatch):
             _Upload(b"x" * 4096),
             max_upload_bytes=1024,
             max_side=1280,
+            max_image_pixels=get_settings().identify_max_image_pixels,
+            jpeg_quality=get_settings().identify_jpeg_quality,
+            max_concurrent_decodes=2,
+            decode_memory_budget_mb=1024,
+            decode_bytes_per_pixel=7.5,
         )
 
     with pytest.raises(ApiError) as excinfo:
@@ -761,8 +854,10 @@ def test_identify_reports_oversize_resolution_as_its_own_code(client, monkeypatc
     This is the production failure: a 48 MP iPhone photo came back as 415 and
     the UI told the user the format was unsupported.
     """
+    # The ceiling is a setting now, so this is a config change, not a patched
+    # module constant — which is the point of making it configurable.
     monkeypatch.setattr(
-        "fishagent.core.image_guard.MAX_IMAGE_PIXELS", 1_000_000, raising=True
+        get_settings(), "identify_max_image_pixels", 1_000_000, raising=False
     )
     image = Image.new("RGB", (2000, 1500), (20, 60, 90))  # 3 MP, over the cap
     buffer = io.BytesIO()

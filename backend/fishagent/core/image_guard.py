@@ -36,46 +36,22 @@ except ImportError:  # pragma: no cover - the dependency is declared, not option
 
 ACCEPTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "HEIF", "AVIF"})
 
-# 80 megapixels covers every iPhone camera mode (12/24/48 MP) and panoramas
-# (~43 MP) with room to spare, while still rejecting decompression bombs.
-# It must be this high: the previous 40 MP cap rejected 48 MP photos outright,
-# which most iPhone users produce by default. Measured peak RSS for a full
-# decode is ~356 MB at 48 MP and ~524 MB at 72 MP, so the cap is a memory
-# bound too — don't raise it without re-measuring.
-#
-# Pillow raises a hard DecompressionBombError only above 2x this limit and
-# merely emits DecompressionBombWarning in the 1x-2x band, so the warning is
-# promoted to an error below and width*height is checked explicitly as well.
-MAX_IMAGE_PIXELS = 80_000_000
-Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
-
-JPEG_QUALITY = 85
 READ_CHUNK_BYTES = 64 * 1024
-
-# Decoding is where the memory goes, and ``draft()`` does not work for HEIF, so
-# there is no cheaper downsample-on-decode path. Measured peak RSS delta per
-# decode is ~7.3 bytes per pixel — 12 MP ≈ 91 MB, 24 MP ≈ 179 MB, 48 MP ≈ 356 MB,
-# 72 MP ≈ 524 MB — which is very close to linear, so a photo's cost is
-# predictable from its header alone.
-#
-# Admission is therefore priced by memory, not by a fixed slot count: a 12 MP
-# photo is cheap enough to decode several at a time, while an 80 MP one must
-# run alone. The count cap exists separately because decoding is CPU-bound
-# (48 MP takes ~1 s on one core), so memory headroom alone would let small
-# photos thrash the CPU.
-DECODE_BYTES_PER_PIXEL = 7.5
 _MB = 1_000_000
-# 1536 MB is sized so the CPU cap can actually bind on large photos: 4 slots ×
-# 366 MB (48 MP) ≈ 1464 MB, which a 1024 MB budget could never hold, leaving
-# two of the four slots permanently idle for large uploads.
-_DEFAULT_DECODE_MEMORY_BUDGET_MB = 1536
-_DEFAULT_MAX_CONCURRENT_DECODES = 4
+
+# The pixel ceiling and the decode pricing live in Settings (identify_*), not
+# here: a hardcoded ceiling is exactly what caused the 2026-10-27 outage, when
+# 40 MP rejected every 48 MP iPhone photo and accepting a new camera resolution
+# required a code change. Pillow's own ``Image.MAX_IMAGE_PIXELS`` is a process
+# global, so it is synced from settings once at startup (``sync_pillow_limits``)
+# rather than mutated per request — concurrent requests would race on it.
+
 
 # Keyed by event loop: ``asyncio.Semaphore`` binds to the loop it first waits
 # on, so a single global instance raises "bound to a different event loop"
 # wherever a second loop exists (every test using ``asyncio.run``).
 _DECODE_ADMISSION: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, tuple[tuple[int, int], _DecodeAdmission]
+    asyncio.AbstractEventLoop, tuple[tuple[int, int, float], _DecodeAdmission]
 ] = weakref.WeakKeyDictionary()
 
 
@@ -89,9 +65,12 @@ class _DecodeAdmission:
     cannot deadlock against each other.
     """
 
-    def __init__(self, max_concurrent: int, budget_mb: int) -> None:
+    def __init__(
+        self, max_concurrent: int, budget_mb: int, bytes_per_pixel: float = 7.5
+    ) -> None:
         self.max_concurrent = max_concurrent
         self.budget_mb = budget_mb
+        self.bytes_per_pixel = bytes_per_pixel
         self._active = 0
         self._in_use_mb = 0
         self._cond = asyncio.Condition()
@@ -104,7 +83,7 @@ class _DecodeAdmission:
         """
         if width <= 0 or height <= 0:
             return 1  # unknown header; assume the cheapest ticket
-        estimated = (width * height) * DECODE_BYTES_PER_PIXEL / _MB
+        estimated = (width * height) * self.bytes_per_pixel / _MB
         return max(1, min(int(estimated + 0.999), self.budget_mb))
 
     @asynccontextmanager
@@ -129,12 +108,14 @@ class _DecodeAdmission:
                 self._cond.notify_all()
 
 
-def _decode_admission(max_concurrent: int, budget_mb: int) -> _DecodeAdmission:
+def _decode_admission(
+    max_concurrent: int, budget_mb: int, bytes_per_pixel: float
+) -> _DecodeAdmission:
     loop = asyncio.get_running_loop()
-    key = (max_concurrent, budget_mb)
+    key = (max_concurrent, budget_mb, bytes_per_pixel)
     entry = _DECODE_ADMISSION.get(loop)
     if entry is None or entry[0] != key:
-        admission = _DecodeAdmission(max_concurrent, budget_mb)
+        admission = _DecodeAdmission(max_concurrent, budget_mb, bytes_per_pixel)
         _DECODE_ADMISSION[loop] = (key, admission)
         return admission
     return entry[1]
@@ -146,6 +127,22 @@ class AsyncByteReader(Protocol):
     """The slice of ``starlette.datastructures.UploadFile`` used here."""
 
     async def read(self, size: int = -1) -> bytes: ...
+
+
+def sync_pillow_limits(max_image_pixels: int) -> None:
+    """Point Pillow's process-global bomb threshold at the configured ceiling.
+
+    Pillow reads ``Image.MAX_IMAGE_PIXELS`` itself and raises
+    ``DecompressionBombError`` above twice that value, so the global has to
+    agree with ours or Pillow's hard error would fire at a different point than
+    the explicit check below. Called once at startup because writing global
+    state per request would race between concurrent uploads.
+
+    The explicit ``width * height`` comparison in ``_open_verified`` stays the
+    authority: Pillow's warning band is 1x-2x, and the configured ceiling must
+    be what actually applies.
+    """
+    Image.MAX_IMAGE_PIXELS = int(max_image_pixels)
 
 
 def _too_large(max_upload_bytes: int) -> ApiError:
@@ -206,7 +203,13 @@ async def read_upload(upload: AsyncByteReader, *, max_upload_bytes: int) -> byte
     return data
 
 
-def decode_and_normalize(data: bytes, *, max_side: int) -> tuple[bytes, str]:
+def decode_and_normalize(
+    data: bytes,
+    *,
+    max_side: int,
+    max_image_pixels: int,
+    jpeg_quality: int,
+) -> tuple[bytes, str]:
     """Decode, downscale, flatten to RGB and re-encode as JPEG.
 
     Returns ``(jpeg_bytes, "image/jpeg")``. The JPEG is encoded without any
@@ -214,7 +217,7 @@ def decode_and_normalize(data: bytes, *, max_side: int) -> tuple[bytes, str]:
     GPS tag phone cameras write) can never be carried into the bytes sent to
     the vision model.
     """
-    source = _open_verified(data)
+    source = _open_verified(data, max_image_pixels=max_image_pixels)
     try:
         flattened = _flatten_transparency(source)
         resized = _resize(flattened, max_side)
@@ -228,7 +231,7 @@ def decode_and_normalize(data: bytes, *, max_side: int) -> tuple[bytes, str]:
             rgb.info.clear()
 
             buffer = io.BytesIO()
-            rgb.save(buffer, format="JPEG", quality=JPEG_QUALITY)
+            rgb.save(buffer, format="JPEG", quality=jpeg_quality)
             jpeg = buffer.getvalue()
         finally:
             rgb.close()
@@ -254,10 +257,16 @@ async def prepare_image(
     *,
     max_upload_bytes: int,
     max_side: int,
-    max_concurrent_decodes: int = _DEFAULT_MAX_CONCURRENT_DECODES,
-    decode_memory_budget_mb: int = _DEFAULT_DECODE_MEMORY_BUDGET_MB,
+    max_image_pixels: int,
+    jpeg_quality: int,
+    max_concurrent_decodes: int,
+    decode_memory_budget_mb: int,
+    decode_bytes_per_pixel: float,
 ) -> tuple[bytes, str]:
     """Read a streamed upload and normalise it off the event loop.
+
+    Every limit is a caller-supplied setting; nothing here is hardcoded, so a
+    deployment can retune any of them without a code change.
 
     Admission is priced per photo: the header is peeked first (0.1 ms, no pixel
     decode) so a small photo can be admitted alongside others while an 80 MP
@@ -269,6 +278,7 @@ async def prepare_image(
     admission = _decode_admission(
         max(1, int(max_concurrent_decodes)),
         max(1, int(decode_memory_budget_mb)),
+        float(decode_bytes_per_pixel),
     )
     weight = admission.weight_for(width, height)
     logger.info(
@@ -284,10 +294,16 @@ async def prepare_image(
         queued = time.monotonic() - started
         if queued >= 0.1:
             logger.info("decode queue: waited %.2fs for %d MB", queued, weight)
-        return await asyncio.to_thread(decode_and_normalize, data, max_side=max_side)
+        return await asyncio.to_thread(
+            decode_and_normalize,
+            data,
+            max_side=max_side,
+            max_image_pixels=max_image_pixels,
+            jpeg_quality=jpeg_quality,
+        )
 
 
-def _open_verified(data: bytes) -> Image.Image:
+def _open_verified(data: bytes, *, max_image_pixels: int) -> Image.Image:
     image: Image.Image | None = None
     try:
         with warnings.catch_warnings():
@@ -306,14 +322,14 @@ def _open_verified(data: bytes) -> Image.Image:
                 logger.info("upload rejected: empty %s image %sx%s", image.format, width, height)
                 raise _unsupported()
             # Explicit pixel check: never rely on Pillow's threshold alone.
-            if width * height > MAX_IMAGE_PIXELS:
+            if width * height > max_image_pixels:
                 logger.info(
                     "upload rejected: %s %sx%s = %s px exceeds %s",
                     image.format,
                     width,
                     height,
                     width * height,
-                    MAX_IMAGE_PIXELS,
+                    max_image_pixels,
                 )
                 raise _too_many_pixels(width, height)
             # Force a real decode: a valid header with a truncated or corrupt

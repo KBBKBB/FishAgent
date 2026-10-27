@@ -138,11 +138,27 @@
           </div>
         </div>
         <form class="chat-form" id="chat-form">
+          <div class="chat-tools" role="group" aria-label="图片识别">
+            <button type="button" class="chat-tool-btn chat-tool-upload" id="identify-upload-btn" aria-label="上传图片识别鱼种" title="上传图片识别鱼种">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                <path d="M12 15.5V4.5m0-1.5 4.8 4.8M12 3 7.2 7.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                <path d="M4.5 14.5v3.6A2 2 0 0 0 6.5 20h11a2 2 0 0 0 2-1.9v-3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+              </svg>
+            </button>
+            <input class="sr-only" id="identify-upload-input" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+            <button type="button" class="chat-tool-btn chat-tool-camera" id="identify-camera-btn" aria-label="拍照识别鱼种" title="拍照识别鱼种">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                <path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2.2l1.2-1.8A1.5 1.5 0 0 1 10.2 4.5h3.6a1.5 1.5 0 0 1 1.3.7L16.3 7h2.2A1.5 1.5 0 0 1 20 8.5v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                <circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"></circle>
+              </svg>
+            </button>
+            <input class="sr-only" id="identify-camera-input" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+          </div>
           <label class="sr-only" for="chat-input">输入你的问题</label>
           <input id="chat-input" name="message" type="text" maxlength="500" autocomplete="off" placeholder="例如：今天气压适合钓鱼吗？" required>
           <button type="submit" class="btn btn-primary" id="chat-send">发送</button>
         </form>
-        <p class="chat-note">对话由 AI 生成，仅供参考，不承诺渔获；请遵守当地禁钓规定。</p>
+        <p class="chat-note">上传或拍摄鱼获照片可识别鱼种；输入框文字会作为补充说明一并发送。对话与识别结果均由 AI 生成，仅供参考，不承诺渔获；请遵守当地禁钓规定。</p>
       </section>
     </aside>
   </main>

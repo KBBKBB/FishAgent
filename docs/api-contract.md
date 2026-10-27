@@ -1,4 +1,4 @@
-# FishAgent MVP 接口与工程契约 v1.6
+# FishAgent MVP 接口与工程契约 v1.8
 
 > 本契约是并行开发的唯一字段依据。字段改名或语义变更必须先通知协调者（小项）并更新本文件。
 >
@@ -8,6 +8,8 @@
 > v1.4（2026-10-23）：`GET /api/spots/recommend` 新增 `offset`（默认 0，0–20）用于“换一批”；评估目标改为 `offset+limit`（仍受 30 上限），返回 `eligible[offset:offset+limit]`；`eligible = returned + truncated_by_limit` 不变。商业 POI 过滤补充经营部/建材/商贸等后缀；评估批次改为 `max(limit, 10)`。
 > v1.5（2026-10-25）：新增 `POST /api/spots/species`（推荐鱼种）与 `SpeciesProvider` 注入点；明确空结果、降级与缓存口径。
 > v1.6（2026-10-25）：同步第二轮修复口径——降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；补物种相关配置与注入点。
+> v1.7（2026-10-26）：Phase 2 三阶段并发化 + 加深截止时间；页预算 6→12、LLM 调用 4→2；LLM 抽取计入每日配额并按 4.6 降级；未注册 API 路径的违规方法改为 404。
+> v1.8（2026-10-27）：新增 `POST /api/agent/identify-fish`（图片识别鱼种，CR-05）；见 4.7 与 `cr05-fish-identification.md`。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -348,16 +350,31 @@ fixtures/                         # 小产：演示场景
 - 请求字段上限：`spot_id` ≤ 64、`name` 1–120、`water_type` ≤ 40、`address` ≤ 200；`name` 去空格后不得为空。
 - 鱼种经过别名归一、去重、白名单过滤，单钓位最多 4 个，且只返回已知鱼种。
 - 查不到时 `species=[]`、`has_recommendation=false`、`source="none"`、`note="暂无相关鱼种推荐"`。
+- **未知 API 路径的方法语义**：`/api/*` 兜底路由对所有方法生效。路径未注册返回 404 `NOT_FOUND`（`接口不存在：…`）；路径已注册但方法不匹配返回 405 `METHOD_NOT_ALLOWED`（`接口不支持该请求方法：…`）。禁止让未匹配请求落到静态目录挂载上，那会返回 Starlette 默认英文 `Method Not Allowed`，掩盖真实原因。
 - **降级语义**：Provider 超时、抛异常（含配额异常）、返回结构异常时，一律返回 200 + **全部空结果** + `degraded=true`；不得返回 5xx。结构异常包括：外层非 list、行数与本次实际查询数（缓存未命中项数）不符、单行不是 list/tuple。降级响应不得混入缓存中的非空结果。
 - **取消传播**：`asyncio.CancelledError` 必须向上传播，不得被降级逻辑吞掉。
 - **缓存**：进程内按归一化 `(name, water_type)` 元组缓存，重启清空、多 worker 不共享；成功非空结果 TTL 为 `FISHAGENT_SPECIES_CACHE_TTL_SECONDS`（默认 3600），空结果与降级结果 TTL 为 `min(TTL, 300)`；降级结果同样写入负缓存，避免上游故障时逐请求重打；TTL=0 时不读不写；缓存条目上限 2000，超限先清过期再全清。
 - `FISHAGENT_SPECIES_PROVIDER`：`mock` / `bing` / `none` / `disabled`。留空时 Mock 模式用 `mock`，真实模式用 `none`；未知值告警后按 `none`。
 - **`bing` Provider（Phase 1）**：以「{水域名} 钓鱼」两词查询 cn.bing，只解析结果页的标题与摘要，用 `core/species.py` 的白名单与别名做匹配；不抓取目标页正文、不调用 LLM、不使用 Cookie。命中则返回鱼种，未命中或遭遇验证码/非 200/网络异常时返回空列表（`has_recommendation=false`）。因此召回率取决于 Bing 是否收录该水域的钓鱼内容，`source_label` 为「Bing 搜索（仅供参考）」。
   - 已知限制：cn.bing 对长查询和多词查询会退化为只匹配首个专有名词（如「青山水库」命中小说《青山》、「千岛湖」命中「千岛 App」）；`site:xiaohongshu.com` 在 cn.bing 上无效且小红书内容几乎无收录。真实小红书检索需官方或授权数据源。
-  - **Phase 2（`FISHAGENT_SPECIES_PAGE_FETCH=true`）**：当摘要命中不足 2 个鱼种时，抓取前若干个结果页正文，先做白名单匹配，再（若配置了 `LLM_API_KEY`）由 LLM 抽取。预算按**请求**而非钓位计算：每请求最多抓 6 页、最多 4 次 LLM 调用，单页正文最多取 4000 字符送模型。抓取受 SSRF 防护约束：仅允许 http(s)、仅允许解析到公网地址、拒绝 localhost/私网/链路本地/保留地址，单页最多 512KB。百科、问答、搜索引擎自身等噪声域名跳过。任一页面失败只影响该页，不影响整批。
+  - **Phase 2（`FISHAGENT_SPECIES_PAGE_FETCH=true`）**：当摘要命中不足 2 个鱼种时，抓取前若干个结果页正文，先做白名单匹配，再（若配置了 `LLM_API_KEY`）由 LLM 抽取。预算按**请求**而非钓位计算：每请求最多抓 12 页、最多 2 次 LLM 调用，单页正文最多取 4000 字符送模型。抓取受 SSRF 防护约束：仅允许 http(s)、仅允许解析到公网地址、拒绝 localhost/私网/链路本地/保留地址，单页最多 512KB。百科、问答、搜索引擎自身等噪声域名跳过。任一页面失败只影响该页，不影响整批。
+  - **并发与时间预算**：搜索结果检索、页面抓取、逐钓位加深三个阶段对钓位并行（单个钓点内部仍串行，且同一请求最多一个 LLM 调用在飞）；每请求预算在并发前按钓位分配（先补满单个钓点的 `_PAGE_CONCURRENCY` 上限，再轮到下一个）。加深阶段带截止时间：`FISHAGENT_SPECIES_TIMEOUT_SECONDS` 减去 0.35s 留白，届时未开始的抓页/抽取直接放弃并保留已得的摘要命中，避免被 `asyncio.wait_for` 整体取消而丢掉全部结果。单次 LLM 调用亦受剩余时间约束。
+  - **LLM 配额**：抽取调用计入 CR-03 的每日 LLM 配额（`FISHAGENT_LLM_DAILY_QUOTA`，与 Agent 共用同一账本，跨进程重启重置）。配额耗尽时抽取返回空列表并保留摘要/正文白名单命中，不抛 429——遵循本节「配额异常降级为 200」的裁决；`/api/pilot/usage` 的 `llm` 项会显示 `exhausted=true`。
   - 合规：仅读取公开搜索结果页；展示时必须保留来源标识与「仅供参考」。
 - **配额异常口径（2026-10-25 裁决）**：Provider 配额耗尽按本节降级为 200（不返回 429）；`providers/base.py` 中「配额异常应返回 429」的通用注释不适用于本端点。
 - 前端必须标注来源与“仅供参考”，不得承诺渔获；`degraded=true` 时文案必须与「暂无相关鱼种推荐」区分（如「鱼种信息暂不可用，仅供参考」）。
+
+### 4.7 `POST /api/agent/identify-fish`（CR-05，图片识别鱼种）
+
+上传或拍摄一张照片识别鱼种，返回置信度、简要知识、习性、钓饵推荐与注意事项。完整规格见 [`cr05-fish-identification.md`](cr05-fish-identification.md)，本节只记录与主契约相关的硬约束。
+
+- 请求：`multipart/form-data`，`image`（file，必填）+ `note`（text，可选，≤100 字符）。图片大小上限 `FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES`（默认 8 MiB）。
+- 图片处理：流式读取并截断、Pillow 真实解码（不信任 `Content-Type`/扩展名）、最长边缩放至 `FISHAGENT_IDENTIFY_MAX_SIDE`（默认 1280）、重编码 JPEG quality=85、**丢弃 EXIF（含手机 GPS）**。全程在内存中，不落盘、不缓存、不记日志。
+- 模型：`LLM_VISION_MODEL`，留空回落 `LLM_MODEL`。所配模型必须接受图像输入。`content` 为空一律视为失败，不得把 `reasoning_content` 当答案。
+- `identified=false` 时 `species` 与 `raw_species` 必须为 `null`——模型会把「无法识别」等占位词填进 `species`，不得透传给前端。
+- 文本字段命中 `violates_guardrails`（承诺渔获）时，整体降级为未识别，不得输出半清洗的结果。
+- 错误：413 `PAYLOAD_TOO_LARGE` / 415 `UNSUPPORTED_MEDIA_TYPE` / 422 `VALIDATION_ERROR` / 429 `QUOTA_EXCEEDED` / 503 `PROVIDER_NOT_CONFIGURED`，均用统一错误体。
+- **配额**：真实模式每次视觉调用在 `api/identify.py` 内 `ledger.consume("llm")` 扣 1 单位；耗尽抛 `UpstreamQuotaExceeded` 由已有 handler 转 429 + `Retry-After`。与 4.6 不同：本端点无部分结果可降级，故返回 429 而非 200。
 
 ## 5. Mock 数据要求
 
@@ -417,3 +434,5 @@ cd backend
 | v1.3 | 2026-10-22 | 真实模式水体类型召回、回程批量预筛、分批精算、有界并发/限速；`filtered` 增补 `unavailable/evaluated/unevaluated` | 真实高德 100km 串行精算超时且关键词召回混入业务 POI |
 | v1.5 | 2026-10-25 | 新增 `POST /api/spots/species`（推荐鱼种）与 `SpeciesProvider` 注入点；明确空结果、降级与缓存口径 | CR-04：钓位卡展示小红书网友推荐鱼种 |
 | v1.6 | 2026-10-25 | 同步第二轮修复口径：降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；配额异常裁决为降级 200；补物种相关配置与注入点 | CR-04 实现收敛 |
+| v1.7 | 2026-10-26 | Phase 2 串行改并发（检索/抓页/加深三阶段）、每请求页预算 6→12、LLM 调用 4→2、加深阶段截止时间与单次调用限时；LLM 抽取计入每日配额并按 4.6 降级；明确未知 API 路径 404/405 语义 | 5 钓位批量冷启动 4.1s 撞 4s 超时导致整批降级；未注册路径的 POST 误报英文 405 |
+| v1.8 | 2026-10-27 | 新增图片识别鱼种端点（multipart 上传、图片内存内规范化与 EXIF 丢弃、视觉模型抽取、占位词与承诺性表述防护、配额返 429） | CR-05：Agent 板块支持拍照/上传识别鱼种 |

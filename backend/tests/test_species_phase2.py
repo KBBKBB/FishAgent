@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from fishagent.core.species import KNOWN_SPECIES
+from fishagent.pilot.limits import DailyQuotaLedger, QuotaGuardedSpeciesExtractor
 from fishagent.providers.safe_fetch import html_to_text, is_fetchable
 from fishagent.providers.species_bing import BingSpeciesProvider
 from fishagent.providers.species_extract import SpeciesExtractor, _parse_species
@@ -355,3 +356,129 @@ def test_bing_llm_budget_boundaries(budget, expected_calls):
 
     run(go())
     assert extractor.calls == expected_calls
+
+
+# --- daily LLM quota guard on species extraction --------------------------
+
+
+def _ledger(limit: int) -> DailyQuotaLedger:
+    return DailyQuotaLedger(
+        {"amap": 100, "open_meteo": 100, "llm": limit},
+    )
+
+
+class _StubExtractor:
+    """Minimal stand-in: records calls and returns a fixed list."""
+
+    def __init__(self, species: list[str] | None = None) -> None:
+        self.calls = 0
+        self._species = species or ["草鱼"]
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    async def extract(self, text: str) -> list[str]:
+        self.calls += 1
+        return list(self._species)
+
+
+def test_guarded_extractor_consumes_one_unit_per_call():
+    ledger = _ledger(10)
+    stub = _StubExtractor()
+    guarded = QuotaGuardedSpeciesExtractor(stub, ledger)
+
+    assert run(guarded.extract("千岛湖鲫鱼很多")) == ["草鱼"]
+    assert run(guarded.extract("千岛湖鲤鱼很多")) == ["草鱼"]
+
+    assert stub.calls == 2
+    assert ledger.snapshot()["providers"]["llm"]["used"] == 2
+
+
+def test_guarded_extractor_degrades_to_empty_when_quota_exhausted():
+    """Contract 4.6: quota exhaustion must degrade, never surface as 429."""
+    ledger = _ledger(1)
+    stub = _StubExtractor()
+    guarded = QuotaGuardedSpeciesExtractor(stub, ledger)
+
+    assert run(guarded.extract("第一次")) == ["草鱼"]
+    # Second call would exceed the limit: no upstream call, empty result.
+    assert run(guarded.extract("第二次")) == []
+
+    assert stub.calls == 1
+    assert ledger.snapshot()["providers"]["llm"]["exhausted"] is True
+
+
+def test_guarded_extractor_respects_zero_quota():
+    ledger = _ledger(0)
+    stub = _StubExtractor()
+    guarded = QuotaGuardedSpeciesExtractor(stub, ledger)
+
+    assert run(guarded.extract("千岛湖鲫鱼")) == []
+    assert stub.calls == 0
+
+
+def test_guarded_extractor_proxies_enabled_flag():
+    assert QuotaGuardedSpeciesExtractor(_StubExtractor(), _ledger(5)).enabled is True
+    assert QuotaGuardedSpeciesExtractor(SpeciesExtractor(None, "m"), _ledger(5)).enabled is False
+
+
+def test_bing_quota_exhaustion_keeps_snippet_hits():
+    """A dry LLM budget must not erase species found by snippet or page matching."""
+    ledger = _ledger(0)
+    stub = _StubExtractor(["草鱼"])
+    provider = BingSpeciesProvider(
+        extractor=QuotaGuardedSpeciesExtractor(stub, ledger),
+    )
+    html = _serp(["https://example.com/a"])
+    provider._extract_snippets = lambda _html: ["鲫鱼很多"]
+
+    async def fake_fetch(client, urls):
+        # Body text carries no species name, so only the whitelist pass is a
+        # no-op and the LLM path is actually reached (and then refused).
+        return ["风景很好，适合周末出游。"]
+
+    provider._fetch_pages = fake_fetch
+
+    def handler(request):
+        return httpx.Response(200, text=html)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await provider._lookup_with_budget(client, SpotSpeciesQuery(name="千岛湖"))
+
+    species, _fetches, llm_calls = run(go())
+    assert "鲫鱼" in species
+    assert llm_calls == 1  # attempted, but the ledger refused before the model ran
+    assert stub.calls == 0
+
+
+def test_bing_searches_run_concurrently():
+    """A 5-spot batch must not pay serial SERP latency.
+
+    Regression: a serial loop paid each spot's round trip one after another, so
+    a 5-spot batch could cross the 4s endpoint timeout and degrade every card.
+    Asserts overlap directly rather than wall-clock, which is load-sensitive.
+    """
+    provider = BingSpeciesProvider(enable_page_fetch=False)
+    spots = [SpotSpeciesQuery(name=f"湖泊{i}") for i in range(5)]
+    provider._extract_snippets = lambda _html: []
+
+    in_flight = 0
+    peak = 0
+
+    async def slow_search(_client, _spot):
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return None
+
+    provider._search = slow_search
+
+    async def go():
+        return await provider.find_species(spots)
+
+    assert run(go()) == [[] for _ in spots]
+    assert peak == len(spots), f"peak concurrent searches was {peak}, expected {len(spots)}"

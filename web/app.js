@@ -11,6 +11,10 @@
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
   var SPECIES_TIMEOUT_MS = 4500;
+  var IDENTIFY_TIMEOUT_MS = 60000;
+  var IDENTIFY_MAX_BYTES = 8 * 1024 * 1024;
+  var IDENTIFY_MAX_NOTE = 100;
+  var IDENTIFY_MAX_BYTES_TEXT = '图片过大，请压缩后重试';
   var IOS_INSTALL_HINT_KEY = 'fishagent.iosInstallHintDismissed';
   var standaloneQuery =
     typeof window.matchMedia === 'function'
@@ -28,6 +32,7 @@
     '偏差': 'band-poor',
     '劝退': 'band-bad'
   };
+  var CONFIDENCE_LABELS = { high: '高置信度', medium: '中等置信度', low: '低置信度' };
 
   var state = {
     lat: DEFAULT_LOCATION.lat,
@@ -47,7 +52,8 @@
     spotsBusy: false,
     speciesByKey: {},
     speciesPending: {},
-    speciesError: {}
+    speciesError: {},
+    identifyBusy: false
   };
 
   function $(id) {
@@ -179,9 +185,21 @@
 
   function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
-    navigator.serviceWorker.register('./sw.js').catch(function () {
-      return null;
-    });
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then(function (registration) {
+        // Ask the browser to re-check sw.js on every load. Otherwise an installed
+        // phone keeps a stale worker until the browser decides to look, which is
+        // why new releases did not reach the mobile client.
+        if (registration && typeof registration.update === 'function') {
+          registration.update().catch(function () {
+            return null;
+          });
+        }
+      })
+      .catch(function () {
+        return null;
+      });
   }
 
   function bindInstallPrompt() {
@@ -376,6 +394,13 @@
     }
     var init = Object.assign({}, options || {});
     init.headers = Object.assign({ Accept: 'application/json' }, (options && options.headers) || {});
+    // multipart/form-data 必须由浏览器自己生成 boundary，手写 Content-Type 会让后端解析失败。
+    var isFormData = typeof FormData === 'function' && init.body instanceof FormData;
+    if (isFormData) {
+      Object.keys(init.headers).forEach(function (name) {
+        if (name.toLowerCase() === 'content-type') delete init.headers[name];
+      });
+    }
     var controller = null;
     var timer = null;
     if (opts.timeoutMs > 0 && typeof AbortController === 'function') {
@@ -430,7 +455,11 @@
         rateError.retryAfter = retryAfter;
         throw rateError;
       }
-      throw new Error(extractErrorMessage(data, response.status));
+      var requestError = new Error(extractErrorMessage(data, response.status));
+      requestError.status = response.status;
+      requestError.code = code;
+      requestError.data = data;
+      throw requestError;
     }
     if (data === null) {
       throw new Error('服务返回了无法解析的响应。');
@@ -1269,14 +1298,267 @@
   }
 
   function updateChatControls() {
-    $('chat-send').disabled = state.chatBusy;
-    $('chat-input').disabled = state.chatBusy;
+    var busy = state.chatBusy || state.identifyBusy;
+    $('chat-send').disabled = busy;
+    $('chat-input').disabled = busy;
+    updateIdentifyControls();
+  }
+
+  function updateIdentifyControls() {
+    var busy = state.chatBusy || state.identifyBusy;
+    ['identify-upload-btn', 'identify-camera-btn'].forEach(function (id) {
+      var button = $(id);
+      if (!button) return;
+      button.disabled = busy;
+      button.setAttribute('aria-busy', busy ? 'true' : 'false');
+      button.classList.toggle('is-loading', state.identifyBusy);
+    });
+  }
+
+  function isTouchDevice() {
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) {
+      return true;
+    }
+    return Number(navigator.maxTouchPoints) > 0;
+  }
+
+  function identifyErrorMessage(error) {
+    var status = error ? Number(error.status) : 0;
+    if (status === 413) return IDENTIFY_MAX_BYTES_TEXT;
+    if (status === 415) return '不支持的图片格式，请换一张 JPG/PNG 图片';
+    if (status === 429) {
+      return (error && error.message) || rateLimitMessage(error && error.data, error && error.retryAfter);
+    }
+    if (status === 503) return '图片识别服务未配置，暂时无法识别';
+    if (error && error.message) return String(error.message);
+    return '图片识别失败，请稍后重试。';
+  }
+
+  function appendUserImageMessage(file, note) {
+    var list = $('chat-messages');
+    var wrapper = el('div', 'msg msg-user msg-user-image');
+    var bubble = el('div', 'msg-bubble');
+    var preview = el('div', 'msg-image');
+    var image = el('img', 'msg-thumb');
+    var objectUrl = URL.createObjectURL(file);
+    var released = false;
+
+    function release() {
+      if (released) return;
+      released = true;
+      URL.revokeObjectURL(objectUrl);
+    }
+
+    image.alt = '待识别的鱼获照片';
+    // 图片解码完成后立即释放 blob URL，避免长时间占用内存。
+    image.addEventListener('load', release);
+    image.addEventListener('error', release);
+    image.src = objectUrl;
+    preview.append(image);
+    bubble.append(preview);
+    bubble.append(el('span', 'msg-image-text', '识别这张图片'));
+    if (note) bubble.append(el('span', 'msg-image-note', note));
+    wrapper.append(bubble);
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return { element: wrapper, release: release };
+  }
+
+  function identifyField(label, value) {
+    var text = value === undefined || value === null ? '' : String(value).trim();
+    if (!text) return null;
+    var row = el('div', 'identify-row');
+    row.append(el('span', 'identify-label', label));
+    row.append(el('p', 'identify-text', text));
+    return row;
+  }
+
+  function identifyBaits(baits) {
+    var items = Array.isArray(baits)
+      ? baits
+          .filter(function (bait) {
+            return typeof bait === 'string' && bait.trim();
+          })
+          .map(function (bait) {
+            return bait.trim();
+          })
+      : [];
+    if (!items.length) return null;
+    var row = el('div', 'identify-row');
+    row.append(el('span', 'identify-label', '钓饵'));
+    var chips = el('div', 'chips');
+    items.forEach(function (bait) {
+      chips.append(el('span', 'chip', bait));
+    });
+    row.append(chips);
+    return row;
+  }
+
+  function renderIdentifyResult(data) {
+    var payload = data && typeof data === 'object' ? data : {};
+    var list = $('chat-messages');
+    var wrapper = el('div', 'msg msg-assistant msg-identify');
+    var bubble = el('div', 'msg-bubble identify-bubble');
+    var identified = payload.identified === true;
+    var species = identified && payload.species ? String(payload.species) : '';
+
+    if (!identified) {
+      bubble.append(el('p', 'identify-empty', '未能识别出鱼的种类'));
+      var message =
+        typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message.trim()
+          : '未能识别出鱼的种类，请换一张更清晰的照片（建议鱼体完整、光线充足）。';
+      bubble.append(el('p', 'identify-hint', message));
+    } else {
+      var head = el('div', 'identify-head');
+      head.append(el('span', 'identify-species', species || '未命名鱼种'));
+      var confidence = payload.confidence ? String(payload.confidence).toLowerCase() : '';
+      if (confidence) {
+        head.append(
+          el(
+            'span',
+            'confidence-badge confidence-' + confidence,
+            CONFIDENCE_LABELS[confidence] || '置信度：' + confidence
+          )
+        );
+      }
+      bubble.append(head);
+      var summary = identifyField('简要知识', payload.summary);
+      if (summary) bubble.append(summary);
+      var habits = identifyField('习性', payload.habits);
+      if (habits) bubble.append(habits);
+      var baits = identifyBaits(payload.baits);
+      if (baits) bubble.append(baits);
+      var tips = identifyField('提示', payload.tips);
+      if (tips) bubble.append(tips);
+      var caveats = identifyField('注意', payload.caveats);
+      if (caveats) bubble.append(caveats);
+      if (payload.in_catalog === false) {
+        bubble.append(
+          el('p', 'identify-catalog-note', '该鱼种未在我们的常见列表中，信息仅供参考')
+        );
+      }
+    }
+
+    if (payload.ai_disclosure) {
+      bubble.append(el('p', 'identify-disclosure', String(payload.ai_disclosure)));
+    }
+    wrapper.append(bubble);
+
+    var meta = el('div', 'msg-meta');
+    meta.append(el('span', 'mini-badge', 'AI 生成 · 仅供参考'));
+    if (payload.mode === 'mock') meta.append(el('span', 'mini-badge mini-badge-soft', 'Mock 演示'));
+    if (payload.mode === 'llm') meta.append(el('span', 'mini-badge mini-badge-soft', '图像识别'));
+    wrapper.append(meta);
+
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return wrapper;
+  }
+
+  function appendIdentifyError(message) {
+    var wrapper = el('div', 'msg msg-assistant msg-identify');
+    var bubble = el('div', 'msg-bubble identify-bubble');
+    bubble.append(el('p', 'identify-empty', '图片识别失败'));
+    bubble.append(el('p', 'identify-hint', message));
+    wrapper.append(bubble);
+    var meta = el('div', 'msg-meta');
+    meta.append(el('span', 'mini-badge mini-badge-error', '服务提示'));
+    wrapper.append(meta);
+    var list = $('chat-messages');
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return wrapper;
+  }
+
+  async function handleIdentifyFile(file) {
+    if (!file || state.identifyBusy || state.chatBusy) return;
+    var isImage =
+      typeof file.type === 'string' && file.type.indexOf('image/') === 0;
+    if (!isImage) {
+      var formatMessage = '请选择图片文件（支持 JPG/PNG 等常见图片格式）。';
+      appendIdentifyError(formatMessage);
+      setStatus(formatMessage, 'error');
+      return;
+    }
+    if (Number(file.size) > IDENTIFY_MAX_BYTES) {
+      appendIdentifyError(IDENTIFY_MAX_BYTES_TEXT);
+      setStatus(IDENTIFY_MAX_BYTES_TEXT, 'error');
+      return;
+    }
+
+    var input = $('chat-input');
+    var note = String(input.value || '').trim().slice(0, IDENTIFY_MAX_NOTE);
+
+    state.identifyBusy = true;
+    updateChatControls();
+    var preview = appendUserImageMessage(file, note);
+    var typing = appendTyping();
+    if (note) input.value = '';
+
+    try {
+      var form = new FormData();
+      form.append('image', file, file.name || 'fish.jpg');
+      if (note) form.append('note', note);
+      var data = await requestJSON(
+        '/api/agent/identify-fish',
+        { method: 'POST', body: form },
+        { timeoutMs: IDENTIFY_TIMEOUT_MS }
+      );
+      typing.remove();
+      renderIdentifyResult(data);
+    } catch (error) {
+      typing.remove();
+      var errorText = identifyErrorMessage(error);
+      appendIdentifyError(errorText);
+      setStatus('图片识别失败：' + errorText, 'error');
+    } finally {
+      preview.release();
+      state.identifyBusy = false;
+      updateChatControls();
+    }
+  }
+
+  function bindIdentifyEvents() {
+    var uploadButton = $('identify-upload-btn');
+    var uploadInput = $('identify-upload-input');
+    var cameraButton = $('identify-camera-btn');
+    var cameraInput = $('identify-camera-input');
+
+    // 拍照入口只在触摸设备出现（(pointer: coarse) 或无精确指针的触屏设备）。
+    if (cameraButton) cameraButton.hidden = !isTouchDevice();
+
+    function handleChange(input, event) {
+      var target = event.target;
+      var file = target && target.files && target.files[0] ? target.files[0] : null;
+      // 清空以便重复选择同一张图片时仍能触发 change。
+      if (target) target.value = '';
+      if (file) handleIdentifyFile(file);
+      if (input) input.blur();
+    }
+
+    if (uploadButton && uploadInput) {
+      uploadButton.addEventListener('click', function () {
+        uploadInput.click();
+      });
+      uploadInput.addEventListener('change', function (event) {
+        handleChange(uploadInput, event);
+      });
+    }
+    if (cameraButton && cameraInput) {
+      cameraButton.addEventListener('click', function () {
+        cameraInput.click();
+      });
+      cameraInput.addEventListener('change', function (event) {
+        handleChange(cameraInput, event);
+      });
+    }
   }
 
   async function sendMessage(rawText) {
     var input = $('chat-input');
     var message = String(rawText !== undefined && rawText !== null ? rawText : input.value).trim();
-    if (!message || state.chatBusy) return;
+    if (!message || state.chatBusy || state.identifyBusy) return;
     if (message.length > 500) {
       setStatus('问题请控制在 500 字以内。', 'error');
       return;
@@ -1424,6 +1706,7 @@
         sendMessage(button.getAttribute('data-question'));
       });
     });
+    bindIdentifyEvents();
   }
 
   function mockRequest(path, options) {
@@ -1455,7 +1738,28 @@
       }
       return Promise.resolve(makeMockChat(payload.message || ''));
     }
+    if (url.pathname === '/api/agent/identify-fish') {
+      return Promise.resolve(makeMockIdentify());
+    }
     return Promise.reject(new Error('Mock 未实现接口：' + url.pathname));
+  }
+
+  function makeMockIdentify() {
+    return {
+      identified: true,
+      species: '鲫鱼',
+      raw_species: '鲫鱼',
+      in_catalog: true,
+      confidence: 'high',
+      summary: '鲫鱼是常见的淡水底层鱼，适应力强，全年可钓，是野钓最常见的目标鱼。',
+      habits: '喜栖水底，偏爱安静、有水草或缓流的环境，清晨与傍晚觅食更积极。',
+      baits: ['蚯蚓', '红虫', '商品饵（腥香）', '玉米粒'],
+      tips: '钓底为主，注意避开高温正午，可先钓 1.5–2m 浅滩。',
+      caveats: '仅根据单张照片判断，角度与光线可能影响结果。',
+      mode: 'mock',
+      ai_disclosure: DISCLOSURE,
+      generated_at: new Date().toISOString()
+    };
   }
 
   function makeMockFishActivity() {

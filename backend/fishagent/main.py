@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Match
+from starlette.types import Scope
 
 from fishagent import __version__
 from fishagent.api.fish_activity import router as fish_router
+from fishagent.api.identify import router as identify_router
 from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
 from fishagent.api.spots import router as spots_router
@@ -24,6 +27,30 @@ from fishagent.providers.base import UpstreamQuotaExceeded
 logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+
+# The unknown-API catch-all must claim every verb. Registered for GET only, any
+# unmatched POST falls through to the StaticFiles mount, which answers a bare
+# 405 "Method Not Allowed" and hides the real cause (no such route).
+_API_CATCH_ALL = "/api/{path:path}"
+_ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+
+
+def _path_served_by_other_method(app: FastAPI, request: Request) -> bool:
+    """True when a real API route matches this path but not this HTTP method.
+
+    ``Match.PARTIAL`` is exactly "the path matches, the verb does not". The
+    catch-all itself and the StaticFiles mount always match fully, so they can
+    never produce a false positive here.
+    """
+    scope: Scope = dict(request.scope)
+    for route in app.routes:
+        # Skip the catch-all itself; it matches every verb by construction.
+        if getattr(route, "path", None) == _API_CATCH_ALL:
+            continue
+        match, _ = route.matches(scope)
+        if match == Match.PARTIAL:
+            return True
+    return False
 
 
 def _agent_router() -> APIRouter:
@@ -82,11 +109,22 @@ def create_app() -> FastAPI:
     app.include_router(spots_router)
     app.include_router(species_router)
     app.include_router(_agent_router())
+    app.include_router(identify_router)
     if pilot_state is not None:
         app.include_router(pilot_router)
 
-    @app.get("/api/{path:path}", include_in_schema=False)
-    async def unknown_api_route(path: str) -> None:
+    # Catch-all for every method, not just GET: a POST to an unregistered API
+    # path would otherwise fall through to the StaticFiles mount and answer a
+    # bare 405 "Method Not Allowed", which hides the real cause (no such route).
+    @app.api_route(_API_CATCH_ALL, methods=_ALL_METHODS, include_in_schema=False)
+    async def unknown_api_route(request: Request, path: str) -> None:
+        if _path_served_by_other_method(app, request):
+            # The route exists under a different verb: 405 is the honest answer.
+            raise ApiError(
+                status_code=405,
+                code="METHOD_NOT_ALLOWED",
+                message=f"接口不支持该请求方法：/api/{path}",
+            )
         raise ApiError(
             status_code=404,
             code="NOT_FOUND",

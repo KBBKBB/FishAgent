@@ -21,6 +21,7 @@ from fishagent.providers.base import (
     UpstreamQuotaExceeded,
     WeatherProvider,
 )
+from fishagent.providers.species_extract import SpeciesExtractor
 from fishagent.schemas import LatLon, SpotCandidate, WeatherSnapshot
 
 logger = logging.getLogger(__name__)
@@ -221,3 +222,29 @@ class QuotaGuardedWeatherProvider:
     ) -> WeatherSnapshot:
         self._ledger.consume("open_meteo")
         return await self._inner.get_weather(lat, lon, at, scenario)
+
+
+class QuotaGuardedSpeciesExtractor:
+    """Counts species-extraction LLM calls against the shared daily LLM quota.
+
+    Exhaustion does not raise: contract 4.6 requires this endpoint to degrade
+    to 200 rather than 429, and returning ``[]`` keeps the snippet and page
+    whitelist matches from the same lookup intact. The attempt is still logged,
+    and the ledger marks ``llm`` exhausted so ``/api/pilot/usage`` shows it.
+    """
+
+    def __init__(self, inner: SpeciesExtractor, ledger: DailyQuotaLedger) -> None:
+        self._inner = inner
+        self._ledger = ledger
+
+    @property
+    def enabled(self) -> bool:
+        return self._inner.enabled
+
+    async def extract(self, text: str) -> list[str]:
+        try:
+            self._ledger.consume("llm")
+        except UpstreamQuotaExceeded:
+            logger.warning("species LLM extraction skipped: daily llm quota exhausted")
+            return []
+        return await self._inner.extract(text)

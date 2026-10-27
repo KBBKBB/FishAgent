@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump CACHE_VERSION whenever a precached shell asset changes.
-var CACHE_VERSION = 'fishagent-v6';
+var CACHE_VERSION = 'fishagent-v8';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var PRECACHE_URLS = [
   '/',
@@ -19,9 +19,17 @@ var OFFLINE_API_MESSAGE = '当前处于离线状态，无法获取实时数据�
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    caches.open(STATIC_CACHE).then(function (cache) {
-      return cache.addAll(PRECACHE_URLS);
-    })
+    caches
+      .open(STATIC_CACHE)
+      .then(function (cache) {
+        return cache.addAll(PRECACHE_URLS);
+      })
+      // Take over immediately. Without this the new worker waits for every old
+      // tab to close, and because static assets below are cache-first a phone
+      // that never fully closes the page keeps serving the previous app.js.
+      .then(function () {
+        return self.skipWaiting();
+      })
   );
 });
 
@@ -95,9 +103,12 @@ function handleNavigation(request) {
 }
 
 function handleStatic(request) {
+  // Stale-while-revalidate: serve the cached copy immediately for speed, then
+  // refresh it in the background. Pure cache-first meant a cached app.js was
+  // never re-fetched, so a new deployment could not reach an installed client
+  // even after CACHE_VERSION was bumped.
   return caches.match(request).then(function (cached) {
-    if (cached) return cached;
-    return fetch(request)
+    var network = fetch(request)
       .then(function (response) {
         if (response && response.ok && response.type === 'basic') {
           var copy = response.clone();
@@ -108,8 +119,9 @@ function handleStatic(request) {
         return response;
       })
       .catch(function () {
-        return new Response('', { status: 504, statusText: 'Offline' });
+        return cached || new Response('', { status: 504, statusText: 'Offline' });
       });
+    return cached || network;
   });
 }
 

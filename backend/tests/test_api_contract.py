@@ -40,6 +40,21 @@ def test_static_assets_are_served(client):
     assert client.get("/styles.css").status_code == 200
 
 
+def test_service_worker_does_not_pin_clients_to_stale_assets(client):
+    """Installed phones must be able to receive a new release.
+
+    Regression: without skipWaiting the new worker waited for every tab to
+    close, and the cache-first static handler never re-fetched app.js, so a
+    mobile client kept running the previous build (missing the species line).
+    """
+    sw = client.get("/sw.js").text
+    assert "skipWaiting" in sw, "service worker must activate without waiting"
+    assert "clients.claim" in sw
+
+    app_js = client.get("/app.js").text
+    assert "推荐鱼种" in app_js, "served app.js must render the species line"
+
+
 def test_api_route_is_not_shadowed_by_static_mount(client):
     response = client.get("/api/fish-activity", params=fish_params())
     assert response.status_code == 200
@@ -60,6 +75,25 @@ def test_unknown_api_route_uses_unified_shape(client):
     body = response.json()
     assert isinstance(body.get("detail"), dict), f"non-unified 404 body: {body}"
     assert body["detail"].get("code") and body["detail"].get("message")
+
+
+def test_unknown_api_route_reports_404_for_post_too(client):
+    """A POST to a missing route must say NOT_FOUND, not "Method Not Allowed".
+
+    Regression: the catch-all used to be GET-only, so an unmatched POST fell
+    through to the StaticFiles mount and answered a bare 405, which hid the real
+    cause (the route never existed).
+    """
+    response = client.post("/api/definitely-not-a-route", json={})
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "NOT_FOUND"
+
+
+def test_wrong_method_on_existing_route_still_reports_405(client):
+    """The verb really is wrong here, so 405 remains the honest answer."""
+    response = client.get("/api/spots/species")
+    assert response.status_code == 405
+    assert response.json()["detail"]["code"] == "METHOD_NOT_ALLOWED"
 
 
 def test_generated_at_is_utc(client):

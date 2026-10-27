@@ -64,6 +64,26 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(default="gpt-4o-mini", validation_alias="LLM_MODEL")
     llm_timeout_seconds: float = Field(default=30.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    # CR-05 image identification. Empty vision model falls back to LLM_MODEL.
+    llm_vision_model: str = Field(default="", validation_alias="LLM_VISION_MODEL")
+    identify_max_upload_bytes: int = Field(
+        default=8_388_608,
+        ge=65_536,
+        le=20_971_520,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES",
+    )
+    identify_max_side: int = Field(
+        default=1280,
+        ge=256,
+        le=2048,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_SIDE",
+    )
+    identify_timeout_seconds: float = Field(
+        default=60.0,
+        ge=5,
+        le=180,
+        validation_alias="FISHAGENT_IDENTIFY_TIMEOUT_SECONDS",
+    )
 
     # Community species lookup (Step 3 "推荐鱼种"). Empty means "mock" in Mock
     # mode and "none" otherwise, so real deployments never invent community data.

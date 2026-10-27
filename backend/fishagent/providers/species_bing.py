@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from urllib.parse import quote
 
 import httpx
@@ -30,8 +31,10 @@ logger = logging.getLogger(__name__)
 _QUERY_TEMPLATE = "{name} 钓鱼"
 _MAX_RESULTS = 8
 # Phase 2 budget: page fetches and LLM calls are the expensive part, so they are
-# capped per request rather than per spot.
-_MAX_PAGE_FETCHES = 6
+# capped per request rather than per spot. Fetches are concurrent, so allowing
+# more pages per request costs latency only for the slowest page, and a spot
+# usually needs 2-3 pages before one of them names a species.
+_MAX_PAGE_FETCHES = 12
 # Each LLM call is sequential and costs ~1s, so the budget is bounded by the
 # endpoint timeout (4s) minus search and page-fetch time. Two calls keep the
 # worst case inside the window; the per-page whitelist pass still runs on all
@@ -43,6 +46,9 @@ _SNIPPET_SUFFICIENT_HITS = 2
 # The API caps a spot at 4 species, so collecting more is wasted work.
 _MAX_RESULT_SPECIES = 4
 _PAGE_CONCURRENCY = 3
+# Leave this much of the timeout for serialising and writing the response after
+# the deepening phase decides to stop.
+_DEEPEN_RESERVE_SECONDS = 0.35
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
@@ -68,6 +74,30 @@ _SKIP_HOSTS = (
     "qidian.com",
     "qq.com",
 )
+
+
+def _share_budget(total: int, count: int, cap: int) -> list[int]:
+    """Split a per-request budget across spots, filling each to ``cap`` first.
+
+    Depth-first rather than an even split: one fetched page is often not enough
+    (the top hit is frequently a government or encyclopedia page), while a spot
+    that gets ``cap`` pages usually resolves. Spreading the budget one page at a
+    time across every spot left most of them one page short of a result.
+    """
+    shares = [0] * count
+    remaining = min(total, count * cap)
+    while remaining > 0:
+        progressed = False
+        for index in range(count):
+            if remaining <= 0:
+                break
+            if shares[index] < cap:
+                shares[index] += 1
+                remaining -= 1
+                progressed = True
+        if not progressed:
+            break
+    return shares
 
 
 class BingSpeciesProvider:
@@ -98,10 +128,14 @@ class BingSpeciesProvider:
         self,
         spots: list[SpotSpeciesQuery],
     ) -> list[list[str]]:
-        # Bing is queried sequentially per batch. The species endpoint already
-        # caps batches at 10 and wraps the whole call in asyncio.wait_for, so a
-        # bounded sequential loop keeps both load and failure modes simple.
-        results: list[list[str]] = []
+        if not spots:
+            return []
+        # The caller wraps this call in asyncio.wait_for(timeout_seconds). Keep a
+        # margin so the phase we can still finish gracefully ends before that
+        # fires: a hard cancel discards *every* spot's result, while running out
+        # of budget only leaves the remaining spots on their snippet hits.
+        started = time.monotonic()
+        results: list[list[str]] = [[] for _ in spots]
         fetch_budget = _MAX_PAGE_FETCHES if self._enable_page_fetch else 0
         llm_budget = _MAX_LLM_CALLS if self._extractor is not None else 0
         async with httpx.AsyncClient(
@@ -112,14 +146,72 @@ class BingSpeciesProvider:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
         ) as client:
-            for spot in spots:
-                species, fetch_used, llm_used = await self._lookup_with_budget(
-                    client, spot, fetch_budget, llm_budget
+            # Search phase runs concurrently: each spot is an independent request
+            # and nothing is shared. A 5-spot batch otherwise spends seconds
+            # serially and times out the whole response at the endpoint budget.
+            searches = await asyncio.gather(
+                *(self._search(client, spot) for spot in spots)
+            )
+
+            pending: list[tuple[int, list[str], list[str]]] = []
+            for index, found in enumerate(searches):
+                if found is None:
+                    continue
+                hits, urls = found
+                results[index] = normalize_species(hits, limit=10)
+                if len(results[index]) >= _SNIPPET_SUFFICIENT_HITS:
+                    continue
+                pending.append((index, results[index], urls))
+
+            # Page fetch and LLM run concurrently too: each spot's deepening is
+            # independent, so running them in series made the last spots pay for
+            # the first ones' latency and lose their window. Budgets are split up
+            # front so the per-request caps still hold: every spot gets at least
+            # one page, and at most _MAX_LLM_CALLS spots get a model call.
+            if pending:
+                fetch_shares = _share_budget(fetch_budget, len(pending), _PAGE_CONCURRENCY)
+                llm_shares = _share_budget(llm_budget, len(pending), 1)
+                deadline = started + self._timeout - _DEEPEN_RESERVE_SECONDS
+                deepened = await asyncio.gather(
+                    *(
+                        self._deepen(client, hits, urls, fetches, llms, deadline)
+                        for (_, hits, urls), fetches, llms in zip(
+                            pending, fetch_shares, llm_shares
+                        )
+                    )
                 )
-                fetch_budget -= fetch_used
-                llm_budget -= llm_used
-                results.append(species)
+                for (index, _, _), (species, _, _) in zip(pending, deepened):
+                    results[index] = species
         return results
+
+    async def _search(
+        self, client: httpx.AsyncClient, spot: SpotSpeciesQuery
+    ) -> tuple[list[str], list[str]] | None:
+        """Run the SERP query and match species from titles/snippets.
+
+        Returns ``(hits, candidate_urls)``, or None when the spot has no usable
+        name or the search failed. Failures degrade to "no recommendation" and
+        never raise.
+        """
+        name = spot.name.strip()
+        if not name:
+            return None
+        query = _QUERY_TEMPLATE.format(name=name)
+        url = f"{self._base_url}?q={quote(query)}&ensearch=0"
+        try:
+            response = await client.get(url)
+        except httpx.HTTPError as exc:
+            logger.warning("bing species query failed for %r: %s", name, exc)
+            return None
+        if response.status_code != 200:
+            logger.warning("bing species non-200 for %r: %s", name, response.status_code)
+            return None
+        if any(marker in response.text for marker in _CAPTCHA_MARKERS):
+            logger.warning("bing species captcha hit for %r", name)
+            return None
+
+        hits = self._match_species(self._extract_snippets(response.text))
+        return hits, self._extract_result_urls(response.text)
 
     async def _lookup_one(self, client: httpx.AsyncClient, spot: SpotSpeciesQuery) -> list[str]:
         """Single-spot lookup with a full budget; convenience wrapper for tests."""
@@ -136,40 +228,41 @@ class BingSpeciesProvider:
         llm_budget: int = _MAX_LLM_CALLS,
     ) -> tuple[list[str], int, int]:
         """Return (species, page_fetches_used, llm_calls_used)."""
-        name = spot.name.strip()
-        if not name:
+        found = await self._search(client, spot)
+        if found is None:
             return [], 0, 0
-        query = _QUERY_TEMPLATE.format(name=name)
-        url = f"{self._base_url}?q={quote(query)}&ensearch=0"
-        try:
-            response = await client.get(url)
-        except httpx.HTTPError as exc:
-            logger.warning("bing species query failed for %r: %s", name, exc)
-            return [], 0, 0
-        if response.status_code != 200:
-            logger.warning("bing species non-200 for %r: %s", name, response.status_code)
-            return [], 0, 0
-        if any(marker in response.text for marker in _CAPTCHA_MARKERS):
-            logger.warning("bing species captcha hit for %r", name)
-            return [], 0, 0
-
-        snippets = self._extract_snippets(response.text)
-        hits = self._match_species(snippets)
+        hits, urls = found
         result = normalize_species(hits, limit=10)
+        return await self._deepen(client, result, urls, fetch_budget, llm_budget)
 
-        # Phase 2: only spend the page budget when the snippets came up short.
-        # Page text is useful even without an LLM (whitelist matching runs on it),
-        # so this gate depends on fetch_budget alone.
+    async def _deepen(
+        self,
+        client: httpx.AsyncClient,
+        result: list[str],
+        urls: list[str],
+        fetch_budget: int,
+        llm_budget: int,
+        deadline: float | None = None,
+    ) -> tuple[list[str], int, int]:
+        """Phase 2: fetch result pages and extract species the snippets missed.
+
+        Returns (species, page_fetches_used, llm_calls_used). ``deadline`` is a
+        monotonic timestamp; once passed, remaining work is abandoned so the
+        caller keeps whatever it already found instead of losing everything to
+        the caller's own timeout.
+        """
+        # Only spend the page budget when the snippets came up short. Page text
+        # is useful even without an LLM (whitelist matching runs on it), so this
+        # gate depends on fetch_budget alone.
         if len(result) >= _SNIPPET_SUFFICIENT_HITS or fetch_budget <= 0:
             return normalize_species(result), 0, 0
 
-        urls = self._extract_result_urls(response.text)
         to_fetch = urls[: min(fetch_budget, _PAGE_CONCURRENCY)]
         fetches_used = len(to_fetch)
         try:
             pages = await self._fetch_pages(client, to_fetch)
         except Exception:  # noqa: BLE001 - a failed page must never fail the lookup
-            logger.warning("page fetch stage failed for %r", name, exc_info=True)
+            logger.warning("page fetch stage failed", exc_info=True)
             pages = []
 
         page_hits: list[str] = []
@@ -188,9 +281,26 @@ class BingSpeciesProvider:
             # LLM extraction only runs for the leftovers, and only when configured.
             if self._extractor is None or llm_budget <= 0:
                 continue
+            if deadline is not None and time.monotonic() >= deadline:
+                # A call started now would outlive the request and its result
+                # would be thrown away; stop and keep what we have.
+                break
             llm_budget -= 1
             llm_calls += 1
-            extracted = await self._extractor.extract(text[:_MAX_PAGE_CHARS_FOR_LLM])
+            try:
+                if deadline is None:
+                    extracted = await self._extractor.extract(text[:_MAX_PAGE_CHARS_FOR_LLM])
+                else:
+                    # Cap the single call at the time left, so a slow model cannot
+                    # push us past the deadline and cost every other spot's hits.
+                    remaining = max(0.0, deadline - time.monotonic())
+                    extracted = await asyncio.wait_for(
+                        self._extractor.extract(text[:_MAX_PAGE_CHARS_FOR_LLM]),
+                        timeout=remaining,
+                    )
+            except TimeoutError:
+                logger.info("species LLM extraction hit the request deadline")
+                break
             for species in extracted:
                 if species not in result and species not in page_hits:
                     page_hits.append(species)

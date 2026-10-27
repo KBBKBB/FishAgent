@@ -12,7 +12,11 @@ from fishagent.agent.llm import load_llm_settings
 from fishagent.config import get_settings
 from fishagent.errors import ApiError
 from fishagent.pilot import get_pilot_state
-from fishagent.pilot.limits import QuotaGuardedGeoProvider, QuotaGuardedWeatherProvider
+from fishagent.pilot.limits import (
+    QuotaGuardedGeoProvider,
+    QuotaGuardedSpeciesExtractor,
+    QuotaGuardedWeatherProvider,
+)
 from fishagent.providers.amap import AMapGeoProvider
 from fishagent.providers.amap_mock import MockGeoProvider
 from fishagent.providers.base import GeoProvider, SpeciesProvider, WeatherProvider
@@ -30,7 +34,9 @@ def _build_species_extractor() -> SpeciesExtractor | None:
     """Build the Phase 2 LLM extractor, or None when no key is configured.
 
     Reuses the same OpenAI-compatible settings as the agent, so one LLM_API_KEY
-    covers both features and Mock mode never calls out.
+    covers both features and Mock mode never calls out. When the pilot quota
+    guard is active, extraction calls are counted against the shared daily LLM
+    quota.
     """
     llm = load_llm_settings()
     if not llm.api_key or llm.mock_mode:
@@ -46,7 +52,11 @@ def _build_species_extractor() -> SpeciesExtractor | None:
         base_url=llm.base_url,
         timeout=llm.timeout_seconds,
     )
-    return SpeciesExtractor(client, llm.model)
+    extractor: SpeciesExtractor = SpeciesExtractor(client, llm.model)
+    pilot_state = get_pilot_state()
+    if pilot_state is None:
+        return extractor
+    return QuotaGuardedSpeciesExtractor(extractor, pilot_state.ledger)
 
 
 def get_weather_provider() -> WeatherProvider:

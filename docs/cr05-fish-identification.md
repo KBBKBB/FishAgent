@@ -102,6 +102,8 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
    - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
    - **上限教训（2026-10-27 实故障）**：上限原为 4000 万像素，导致 iPhone Pro 的 48MP 照片（8064×6048 = 4880 万像素）被直接拒掉，全景照片（10800×4000）同样。iPhone 各档位实测：12MP / 24MP / 48MP 分别是 1220 万 / 2447 万 / 4877 万像素。现调到 8000 万像素，覆盖到 48MP 与全景仍有余量。
    - **内存代价（全分辨率解码，`draft()` 对 HEIF 无效）**：12MP≈91 MB、24MP≈179 MB、48MP≈356 MB、72MP≈524 MB 峰值 RSS。上限同时也是内存边界，调整前须重测。
+   - **解码并发必须有界**：按上述峰值，10 个并发上传理论上可占 3.5 GB。`prepare_image` 用进程内 `asyncio.Semaphore` 限制同时解码数（默认 2，`FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES`）。读取阶段在信号量之外，排队中的请求只占自身字节数，不占解码工作区。
+   - 信号量按 event loop 惰性创建：`asyncio.Semaphore` 会绑定首次等待它的 loop，全局单例在第二个 loop（每个 `asyncio.run` 都是一个）上会抛 `bound to a different event loop`。
    - **不要把分辨率超限混同为格式不支持**：两者用户处置完全不同（前者缩小图片，后者换格式）。历史上二者都返回 415，前端因而统一显示「不支持的图片格式」，把真实原因掩盖掉了。
    - 拒绝时按原因记 `logger.info`（格式名 / 尺寸 / 异常类型），**绝不记录图片内容或 base64**。
 3. 最长边缩放到 `max_side`（默认 1280），转 RGB，重新编码 JPEG quality=85。
@@ -135,6 +137,7 @@ System prompt 要求模型输出：
 | `FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES` | `8388608` | 64 KiB–20 MiB |
 | `FISHAGENT_IDENTIFY_MAX_SIDE` | `1280` | 256–2048 |
 | `FISHAGENT_IDENTIFY_TIMEOUT_SECONDS` | `60.0` | 5–180 |
+| `FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES` | `2` | 1–8 |
 
 ## 6. 前端（`web/`）
 

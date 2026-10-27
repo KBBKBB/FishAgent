@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 import warnings
+import weakref
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
@@ -48,6 +50,28 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 JPEG_QUALITY = 85
 READ_CHUNK_BYTES = 64 * 1024
+
+# Decoding is where the memory goes: a full-resolution 48 MP HEIC peaks around
+# 356 MB and 72 MP around 524 MB, and ``draft()`` does not work for HEIF, so
+# there is no cheaper downsample-on-decode path. Several concurrent uploads
+# would otherwise multiply that. The semaphore is keyed by event loop because
+# ``asyncio.Semaphore`` binds to the loop it first waits on — a single global
+# instance raises "bound to a different event loop" wherever a second loop
+# exists (every test using ``asyncio.run``).
+_DEFAULT_MAX_CONCURRENT_DECODES = 2
+_DECODE_SLOTS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]
+] = weakref.WeakKeyDictionary()
+
+
+def _decode_semaphore(limit: int) -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    entry = _DECODE_SLOTS.get(loop)
+    if entry is None or entry[0] != limit:
+        semaphore = asyncio.Semaphore(limit)
+        _DECODE_SLOTS[loop] = (limit, semaphore)
+        return semaphore
+    return entry[1]
 
 _UNSUPPORTED_MESSAGE = "不支持的图片格式，请上传 JPEG/PNG/WEBP/GIF/HEIC 图片"
 
@@ -164,10 +188,26 @@ async def prepare_image(
     *,
     max_upload_bytes: int,
     max_side: int,
+    max_concurrent_decodes: int = _DEFAULT_MAX_CONCURRENT_DECODES,
 ) -> tuple[bytes, str]:
-    """Read a streamed upload and normalise it off the event loop."""
+    """Read a streamed upload and normalise it off the event loop.
+
+    Decoding runs under a process-wide semaphore so concurrent uploads cannot
+    each claim hundreds of megabytes at once. The read loop stays outside the
+    slot and keeps streaming into a bounded buffer while it waits, so a queued
+    upload costs only its bytes, not a decode workspace.
+    """
     data = await read_upload(upload, max_upload_bytes=max_upload_bytes)
-    return await asyncio.to_thread(decode_and_normalize, data, max_side=max_side)
+    limit = max(1, int(max_concurrent_decodes))
+    semaphore = _decode_semaphore(limit)
+    if semaphore.locked():
+        logger.info("decode queue: no free slot, waiting (limit=%d)", limit)
+    waited = time.monotonic()
+    async with semaphore:
+        queued = time.monotonic() - waited
+        if queued >= 0.1:
+            logger.info("decode queue: waited %.2fs for a slot", queued)
+        return await asyncio.to_thread(decode_and_normalize, data, max_side=max_side)
 
 
 def _open_verified(data: bytes) -> Image.Image:

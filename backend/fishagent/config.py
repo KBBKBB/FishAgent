@@ -84,6 +84,15 @@ class Settings(BaseSettings):
         le=180,
         validation_alias="FISHAGENT_IDENTIFY_TIMEOUT_SECONDS",
     )
+    # Decoding a 48 MP photo peaks around 356 MB, so concurrency is bounded by
+    # memory, not CPU. Two slots keeps the worst case near ~700 MB; raise only
+    # with headroom measured on the target host.
+    identify_max_concurrent_decodes: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES",
+    )
 
     # Community species lookup (Step 3 "推荐鱼种"). Empty means "mock" in Mock
     # mode and "none" otherwise, so real deployments never invent community data.

@@ -23,6 +23,7 @@ from fishagent.core.image_guard import (
     ACCEPTED_FORMATS,
     MAX_IMAGE_PIXELS,
     decode_and_normalize,
+    prepare_image,
     read_upload,
 )
 from fishagent.errors import ApiError
@@ -315,6 +316,125 @@ def test_decode_accepts_normal_phone_photo_size():
     result = Image.open(io.BytesIO(jpeg))
     assert max(result.size) == 1280
     result.close()
+
+
+# --- decode concurrency -----------------------------------------------------
+#
+# A 48 MP decode peaks around 356 MB, so the semaphore is the only thing
+# standing between N concurrent uploads and N * 356 MB. These tests assert peak
+# concurrency directly rather than wall-clock time, which is machine-dependent.
+
+
+def _track_decodes(monkeypatch, gate: float = 0.05):
+    """Wrap decode_and_normalize to record how many run at once."""
+    state = {"current": 0, "peak": 0, "calls": 0}
+
+    def fake_decode(data, *, max_side):
+        state["calls"] += 1
+        state["current"] += 1
+        state["peak"] = max(state["peak"], state["current"])
+        try:
+            import time
+
+            time.sleep(gate)
+            return b"\xff\xd8fake", "image/jpeg"
+        finally:
+            state["current"] -= 1
+
+    monkeypatch.setattr("fishagent.core.image_guard.decode_and_normalize", fake_decode)
+    return state
+
+
+def test_decode_concurrency_is_capped(monkeypatch):
+    """Four simultaneous uploads must never decode more than two at once."""
+    state = _track_decodes(monkeypatch, gate=0.05)
+    payload = _png()
+
+    async def upload_all():
+        async def one():
+            return await prepare_image(
+                _Upload(payload),
+                max_upload_bytes=10 * 1024 * 1024,
+                max_side=1280,
+                max_concurrent_decodes=2,
+            )
+
+        return await asyncio.gather(*(one() for _ in range(4)))
+
+    results = run(upload_all())
+
+    assert len(results) == 4
+    assert state["calls"] == 4, "every upload must still be decoded"
+    assert state["peak"] == 2, f"peak concurrency was {state['peak']}, expected 2"
+
+
+def test_decode_concurrency_of_one_serialises(monkeypatch):
+    state = _track_decodes(monkeypatch, gate=0.02)
+    payload = _png()
+
+    async def run_serial():
+        async def one():
+            return await prepare_image(
+                _Upload(payload),
+                max_upload_bytes=10 * 1024 * 1024,
+                max_side=1280,
+                max_concurrent_decodes=1,
+            )
+
+        return await asyncio.gather(*(one() for _ in range(3)))
+
+    run(run_serial())
+    assert state["peak"] == 1
+
+
+def test_decode_semaphore_survives_a_second_event_loop(monkeypatch):
+    """Each ``asyncio.run`` is a fresh loop; a global semaphore would explode."""
+    _track_decodes(monkeypatch)
+
+    async def once():
+        return await prepare_image(
+            _Upload(_png()),
+            max_upload_bytes=10 * 1024 * 1024,
+            max_side=1280,
+            max_concurrent_decodes=2,
+        )
+
+    assert run(once())
+    assert run(once()), "second run() on a new loop must not raise"
+
+
+def test_zero_concurrency_is_coerced_to_one(monkeypatch):
+    """A misconfigured 0 must not deadlock every upload."""
+    state = _track_decodes(monkeypatch)
+
+    async def once():
+        return await prepare_image(
+            _Upload(_png()),
+            max_upload_bytes=10 * 1024 * 1024,
+            max_side=1280,
+            max_concurrent_decodes=0,
+        )
+
+    assert run(once())
+    assert state["calls"] == 1
+
+
+def test_oversized_upload_never_takes_a_decode_slot(monkeypatch):
+    """The size check must reject before a decode workspace is reserved."""
+    state = _track_decodes(monkeypatch)
+
+    async def once():
+        return await prepare_image(
+            _Upload(b"x" * 4096),
+            max_upload_bytes=1024,
+            max_side=1280,
+            max_concurrent_decodes=2,
+        )
+
+    with pytest.raises(ApiError) as excinfo:
+        run(once())
+    assert excinfo.value.status_code == 413
+    assert state["calls"] == 0, "an over-size upload must not reach the decoder"
 
 
 # --- vision adapter ---------------------------------------------------------

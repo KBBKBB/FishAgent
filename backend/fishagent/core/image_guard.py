@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import warnings
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
 
 from fishagent.errors import ApiError
+
+logger = logging.getLogger(__name__)
 
 # HEIF/AVIF come from ``pillow-heif``: iPhones shoot HEIC by default, and Safari
 # only sometimes transcodes on upload, so a photo picked from Files can arrive
@@ -30,12 +33,17 @@ except ImportError:  # pragma: no cover - the dependency is declared, not option
 
 ACCEPTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "HEIF", "AVIF"})
 
-# 40 megapixels accepts a 4000x3000 phone photo (~12 MP) with headroom while
-# still rejecting decompression bombs. Pillow raises a hard
-# DecompressionBombError only above 2x this limit and merely emits
-# DecompressionBombWarning in the 1x-2x band, so the warning is promoted to an
-# error below and width*height is checked explicitly as well.
-MAX_IMAGE_PIXELS = 40_000_000
+# 80 megapixels covers every iPhone camera mode (12/24/48 MP) and panoramas
+# (~43 MP) with room to spare, while still rejecting decompression bombs.
+# It must be this high: the previous 40 MP cap rejected 48 MP photos outright,
+# which most iPhone users produce by default. Measured peak RSS for a full
+# decode is ~356 MB at 48 MP and ~524 MB at 72 MP, so the cap is a memory
+# bound too — don't raise it without re-measuring.
+#
+# Pillow raises a hard DecompressionBombError only above 2x this limit and
+# merely emits DecompressionBombWarning in the 1x-2x band, so the warning is
+# promoted to an error below and width*height is checked explicitly as well.
+MAX_IMAGE_PIXELS = 80_000_000
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 JPEG_QUALITY = 85
@@ -63,6 +71,24 @@ def _unsupported(message: str = _UNSUPPORTED_MESSAGE) -> ApiError:
         status_code=415,
         code="UNSUPPORTED_MEDIA_TYPE",
         message=message,
+    )
+
+
+def _too_many_pixels(width: int = 0, height: int = 0) -> ApiError:
+    """A resolvable image that is simply too big to decode safely.
+
+    Deliberately *not* a 415: the format is supported and the client's only
+    remedy is to send a smaller photo, so this carries its own code and a
+    message that says what to do rather than blaming the format.
+    """
+    if width > 0 and height > 0:
+        detail = f"（{width}×{height}）"
+    else:
+        detail = ""
+    return ApiError(
+        status_code=413,
+        code="IMAGE_TOO_LARGE",
+        message=f"图片分辨率过大{detail}，请使用较小的照片或先在相册中缩小后重试",
     )
 
 
@@ -154,13 +180,25 @@ def _open_verified(data: bytes) -> Image.Image:
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             image = Image.open(io.BytesIO(data))
             if image.format not in ACCEPTED_FORMATS:
+                # Only the format name is logged — never the bytes or a digest
+                # that could identify the photo.
+                logger.info("upload rejected: format=%s not accepted", image.format)
                 raise _unsupported()
             width, height = image.size
             if width <= 0 or height <= 0:
+                logger.info("upload rejected: empty %s image %sx%s", image.format, width, height)
                 raise _unsupported()
             # Explicit pixel check: never rely on Pillow's threshold alone.
             if width * height > MAX_IMAGE_PIXELS:
-                raise _unsupported("图片尺寸过大")
+                logger.info(
+                    "upload rejected: %s %sx%s = %s px exceeds %s",
+                    image.format,
+                    width,
+                    height,
+                    width * height,
+                    MAX_IMAGE_PIXELS,
+                )
+                raise _too_many_pixels(width, height)
             # Force a real decode: a valid header with a truncated or corrupt
             # body must fail here rather than surface as a 500 later.
             image.seek(0)
@@ -171,17 +209,46 @@ def _open_verified(data: bytes) -> Image.Image:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         if image is not None:
+            size = image.size
             image.close()
-        raise _unsupported("图片尺寸过大") from None
+        else:
+            # Pillow raises the bomb warning *inside* ``Image.open`` before it
+            # ever returns, so no handle exists yet. Re-read only the header,
+            # with the warning silenced, to report the dimensions to the user.
+            size = _peek_size(data)
+        logger.info("upload rejected: decompression bomb %sx%s", *size)
+        raise _too_many_pixels(*size) from None
     except UnidentifiedImageError:
         if image is not None:
             image.close()
+        logger.info("upload rejected: not a decodable image (unidentified)")
         raise _unsupported() from None
-    except (OSError, ValueError, SyntaxError, EOFError):
+    except (OSError, ValueError, SyntaxError, EOFError) as exc:
         if image is not None:
             image.close()
+        # The exception type is the useful part for diagnosis (corrupt body vs
+        # unsupported feature); the payload itself is never logged.
+        logger.info("upload rejected: decode failed (%s)", type(exc).__name__)
         raise _unsupported() from None
     return image
+
+
+def _peek_size(data: bytes) -> tuple[int, int]:
+    """Read only the header for a size, ignoring bomb warnings.
+
+    Used purely to put real dimensions in an error message; the header was
+    already proven too large by the time this runs.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            header = Image.open(io.BytesIO(data))
+            try:
+                return header.size
+            finally:
+                header.close()
+    except Exception:  # noqa: BLE001 - diagnostics only, never worth a 500
+        return (0, 0)
 
 
 def _flatten_transparency(image: Image.Image) -> Image.Image:

@@ -242,14 +242,67 @@ def test_identify_endpoint_accepts_heic_upload(client):
 
 def test_decode_rejects_decompression_bomb():
     """Pixel count alone must reject, well below Pillow's 2x hard-error line."""
-    image = Image.new("L", (8000, 6000), 0)  # 48 MP > 40 MP cap
+    image = Image.new("L", (12000, 8000), 0)  # 96 MP > 80 MP cap
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     image.close()
-    assert 8000 * 6000 > MAX_IMAGE_PIXELS
+    assert 12000 * 8000 > MAX_IMAGE_PIXELS
     with pytest.raises(ApiError) as excinfo:
         decode_and_normalize(buffer.getvalue(), max_side=1280)
-    assert excinfo.value.status_code == 415
+    assert excinfo.value.status_code == 413
+    assert excinfo.value.code == "IMAGE_TOO_LARGE"
+
+
+def test_oversize_is_not_reported_as_an_unsupported_format():
+    """Regression: a 48 MP iPhone photo was rejected as 415 "unsupported".
+
+    The format *is* supported — the client's remedy is a smaller photo, not a
+    different format, so the two failures must stay distinguishable.
+    """
+    image = Image.new("L", (12000, 8000), 0)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image.close()
+    with pytest.raises(ApiError) as excinfo:
+        decode_and_normalize(buffer.getvalue(), max_side=1280)
+    assert excinfo.value.code != "UNSUPPORTED_MEDIA_TYPE"
+    assert "12000" in excinfo.value.message and "8000" in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "label"),
+    [
+        (4032, 3024, "12 MP default"),
+        (5712, 4284, "24 MP"),
+        (8064, 6048, "48 MP Pro"),
+        (10800, 4000, "panorama"),
+    ],
+)
+def test_decode_accepts_every_iphone_camera_resolution(width, height, label):
+    """Real iPhone outputs must pass the guard; 48 MP used to be rejected."""
+    assert width * height <= MAX_IMAGE_PIXELS, f"{label} no longer fits the cap"
+    image = Image.new("RGB", (width, height), (20, 60, 90))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=45)
+    image.close()
+    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    result = Image.open(io.BytesIO(jpeg))
+    assert max(result.size) == 1280
+    result.close()
+
+
+@pytest.mark.skipif(not _HEIF_AVAILABLE, reason="pillow-heif not installed")
+def test_decode_accepts_48mp_heic():
+    """The exact combination that failed in production: 48 MP *and* HEIC."""
+    image = Image.new("RGB", (8064, 6048), (20, 60, 90))
+    buffer = io.BytesIO()
+    image.save(buffer, format="HEIF", quality=40)
+    image.close()
+    jpeg, media_type = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    assert media_type == "image/jpeg"
+    result = Image.open(io.BytesIO(jpeg))
+    assert max(result.size) == 1280
+    result.close()
 
 
 def test_decode_accepts_normal_phone_photo_size():
@@ -507,3 +560,25 @@ def test_identify_rejects_oversized_upload(client, monkeypatch):
 def test_identify_route_is_registered(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert "/api/agent/identify-fish" in paths
+
+
+def test_identify_reports_oversize_resolution_as_its_own_code(client, monkeypatch):
+    """End-to-end: the client must be able to tell "too big" from "wrong format".
+
+    This is the production failure: a 48 MP iPhone photo came back as 415 and
+    the UI told the user the format was unsupported.
+    """
+    monkeypatch.setattr(
+        "fishagent.core.image_guard.MAX_IMAGE_PIXELS", 1_000_000, raising=True
+    )
+    image = Image.new("RGB", (2000, 1500), (20, 60, 90))  # 3 MP, over the cap
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=40)
+    image.close()
+
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("IMG_0001.JPG", buffer.getvalue(), "image/jpeg")},
+    )
+    detail = assert_unified_error(response, 413, "IMAGE_TOO_LARGE")
+    assert "2000" in detail["message"] and "1500" in detail["message"]

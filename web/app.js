@@ -1324,7 +1324,14 @@
 
   function identifyErrorMessage(error) {
     var status = error ? Number(error.status) : 0;
-    if (status === 413) return IDENTIFY_MAX_BYTES_TEXT;
+    if (status === 413) {
+      // 413 有两个来源：上传字节数超限（PAYLOAD_TOO_LARGE）和分辨率超限
+      // （IMAGE_TOO_LARGE）。后者服务端会带上具体尺寸和处置建议，直接透传。
+      if (error && error.code === 'IMAGE_TOO_LARGE' && error.message) {
+        return String(error.message);
+      }
+      return IDENTIFY_MAX_BYTES_TEXT;
+    }
     // Keep this in step with ACCEPTED_FORMATS in core/image_guard.py.
     if (status === 415) return '不支持的图片格式，请换一张 JPG/PNG/WEBP/GIF/HEIC 图片';
     if (status === 429) {
@@ -1474,8 +1481,10 @@
 
   async function handleIdentifyFile(file) {
     if (!file || state.identifyBusy || state.chatBusy) return;
-    var isImage =
-      typeof file.type === 'string' && file.type.indexOf('image/') === 0;
+    // 部分 iOS 场景下 file.type 为空串（尤其从「文件」App 选取的 HEIC）。
+    // 空类型交给服务端按真实解码判断，不要在前端就把合法图片挡掉。
+    var mime = typeof file.type === 'string' ? file.type : '';
+    var isImage = mime === '' || mime.indexOf('image/') === 0;
     if (!isImage) {
       var formatMessage = '请选择图片文件（支持 JPG/PNG 等常见图片格式）。';
       appendIdentifyError(formatMessage);

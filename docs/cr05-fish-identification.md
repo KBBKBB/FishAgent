@@ -80,7 +80,8 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 
 | 状态 | code | 触发 |
 |---|---|---|
-| 413 | `PAYLOAD_TOO_LARGE` | 超过上传上限 |
+| 413 | `PAYLOAD_TOO_LARGE` | 上传字节数超过上限 |
+| 413 | `IMAGE_TOO_LARGE` | 分辨率超过 8000 万像素（格式受支持，只是太大）；`message` 带具体尺寸 |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | 非图片 / 无法解码 / 不支持的格式 |
 | 422 | `VALIDATION_ERROR` | 缺 `image` 字段、`note` 超长 |
 | 429 | `QUOTA_EXCEEDED` | 每日 LLM 配额耗尽（带 `Retry-After`） |
@@ -97,8 +98,12 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 1. 读入上限 `max_upload_bytes`，超限直接 413（读取时即截断，不整体载入内存）。
 2. 用 Pillow 实际解码校验，不信任 `Content-Type` 与扩展名：
    - 仅接受 JPEG / PNG / WEBP / GIF / HEIF / AVIF。其中 HEIF（即 iPhone 的 HEIC）与 AVIF 由 `pillow-heif` 提供解码能力——Safari 在上传时不保证转码，从「文件」App 选取的照片可能原样送达，因此必须由服务端直接支持。
-   - 设置 `Image.MAX_IMAGE_PIXELS` 防解压炸弹，超限 415
-   - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此上限不宜设得过低（建议 ≥ 4000 万像素），否则会误拒正常手机照片；同时必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
+   - 设置 `Image.MAX_IMAGE_PIXELS = 80_000_000` 防解压炸弹，超限返回 **413 `IMAGE_TOO_LARGE`（不是 415）**，`message` 带具体尺寸
+   - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
+   - **上限教训（2026-10-27 实故障）**：上限原为 4000 万像素，导致 iPhone Pro 的 48MP 照片（8064×6048 = 4880 万像素）被直接拒掉，全景照片（10800×4000）同样。iPhone 各档位实测：12MP / 24MP / 48MP 分别是 1220 万 / 2447 万 / 4877 万像素。现调到 8000 万像素，覆盖到 48MP 与全景仍有余量。
+   - **内存代价（全分辨率解码，`draft()` 对 HEIF 无效）**：12MP≈91 MB、24MP≈179 MB、48MP≈356 MB、72MP≈524 MB 峰值 RSS。上限同时也是内存边界，调整前须重测。
+   - **不要把分辨率超限混同为格式不支持**：两者用户处置完全不同（前者缩小图片，后者换格式）。历史上二者都返回 415，前端因而统一显示「不支持的图片格式」，把真实原因掩盖掉了。
+   - 拒绝时按原因记 `logger.info`（格式名 / 尺寸 / 异常类型），**绝不记录图片内容或 base64**。
 3. 最长边缩放到 `max_side`（默认 1280），转 RGB，重新编码 JPEG quality=85。
 4. **重新编码后不写回 EXIF**（手机照片含 GPS 坐标，必须丢弃）。实测：`img.convert("RGB").save(buf, "JPEG", quality=85)` 不带 `exif=` 参数时，输出 EXIF 为空字典，GPS 一并消失。
 5. 返回 `(jpeg_bytes, "image/jpeg")`，**不落盘、不缓存**。
@@ -144,7 +149,8 @@ System prompt 要求模型输出：
   - 未收录鱼种（`in_catalog=false`）追加提示「该鱼种未在我们的常见列表中，信息仅供参考」
   - 未识别时显示服务端 `message`
 - 前端必须在 `URL.revokeObjectURL` 释放预览，不得把图片转 base64 存进 `state`。
-- 错误映射：413 → 「图片过大，请压缩后重试」；415 → 「不支持的图片格式」；429 → 沿用现有 `rateLimitMessage`；503 → 「图片识别服务未配置」。
+- 错误映射：413 → 按 `code` 区分——`IMAGE_TOO_LARGE` 直接透传服务端 `message`（含尺寸与建议），否则「图片过大，请压缩后重试」；415 → 「不支持的图片格式」；429 → 沿用现有 `rateLimitMessage`；503 → 「图片识别服务未配置」。
+- 本地预检：`file.type` 为空串时**不要**在前端拦截（iOS 从「文件」App 选取的 HEIC 会出现这种情况），交给服务端按真实解码判断。
 - `sw.js` `CACHE_VERSION` 升到 `fishagent-v8`。
 - 移动端 375px 下不得横向溢出。
 

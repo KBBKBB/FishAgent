@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
@@ -25,6 +26,25 @@ from fishagent.pilot.router import router as pilot_router
 from fishagent.providers.base import UpstreamQuotaExceeded
 
 logger = logging.getLogger(__name__)
+
+# Root logging is left at WARNING with no handler, so every ``logger.info`` in
+# this package is silently dropped — which is why the 2026-10-27 415 could only
+# be diagnosed by reproducing it by hand. Install a handler and let the app's
+# own records through; uvicorn's loggers are configured separately and are not
+# affected by this. Level is overridable with FISHAGENT_LOG_LEVEL.
+_LOG_FORMAT = "%(levelname)s:     [%(name)s] %(message)s"
+
+
+def _configure_logging() -> None:
+    level_name = os.environ.get("FISHAGENT_LOG_LEVEL", "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=level, format=_LOG_FORMAT)
+        return
+    # Re-configuring on every create_app() call (tests do this) would stack
+    # duplicate handlers; only the level needs updating.
+    root.setLevel(level)
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
@@ -74,6 +94,7 @@ def _agent_router() -> APIRouter:
 
 
 def create_app() -> FastAPI:
+    _configure_logging()
     app = FastAPI(
         title="FishAgent API",
         version=__version__,

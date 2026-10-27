@@ -142,12 +142,22 @@ async def identify_fish(
     if pilot_state is not None:
         pilot_state.ledger.consume("llm")
 
-    logger.info("vision fish identification: image_bytes=%d", len(jpeg_bytes))
+    logger.info("vision fish identification: normalised_image_bytes=%d", len(jpeg_bytes))
     result = await identifier.identify(
         jpeg_bytes,
         media_type=media_type,
         note=trimmed_note,
     )
+    if result is None:
+        # Distinguishes "the model call failed" (provider/timeout/empty content)
+        # from "the model answered but nothing was recognised" — different bugs.
+        logger.info("vision fish identification: model returned no usable answer")
+    else:
+        logger.info(
+            "vision fish identification: identified=%s confidence=%s",
+            result.identified,
+            result.confidence,
+        )
     return _to_response(result)
 
 

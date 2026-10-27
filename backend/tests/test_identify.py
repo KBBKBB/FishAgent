@@ -19,6 +19,8 @@ from PIL import Image
 
 from fishagent.api.identify import PLACEHOLDER_SPECIES, _is_placeholder, _to_response
 from fishagent.core.image_guard import (
+    _HEIF_AVAILABLE,
+    ACCEPTED_FORMATS,
     MAX_IMAGE_PIXELS,
     decode_and_normalize,
     read_upload,
@@ -153,6 +155,89 @@ def test_decode_rejects_unlisted_formats(fmt):
     with pytest.raises(ApiError) as excinfo:
         decode_and_normalize(buffer.getvalue(), max_side=1280)
     assert excinfo.value.status_code == 415
+
+
+# --- HEIC / AVIF: the iPhone default ---------------------------------------
+
+
+def _heif_bytes(fmt: str = "HEIF", size: tuple[int, int] = (320, 240)) -> bytes:
+    image = Image.new("RGB", size, (45, 105, 145))
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt)
+    image.close()
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("fmt", ["HEIF", "AVIF"])
+def test_decode_accepts_heif_family(fmt):
+    """iPhones shoot HEIC; Safari does not always transcode on upload."""
+    if not _HEIF_AVAILABLE:
+        pytest.skip("pillow-heif not installed")
+    jpeg, media_type = decode_and_normalize(_heif_bytes(fmt), max_side=1280)
+    assert media_type == "image/jpeg"
+    result = Image.open(io.BytesIO(jpeg))
+    assert result.format == "JPEG"
+    assert max(result.size) <= 1280
+    result.close()
+
+
+def test_decode_heic_strips_exif():
+    """The privacy promise must hold for the iPhone format too."""
+    if not _HEIF_AVAILABLE:
+        pytest.skip("pillow-heif not installed")
+    image = Image.new("RGB", (300, 200), (60, 120, 160))
+    exif = image.getexif()
+    exif[271] = "iPhoneSecret"
+    exif[34853] = {1: "N", 2: (31.0, 12.0, 0.0), 3: "E", 4: (121.0, 28.0, 0.0)}
+    buffer = io.BytesIO()
+    image.save(buffer, format="HEIF", exif=exif)
+    image.close()
+
+    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    result = Image.open(io.BytesIO(jpeg))
+    assert dict(result.getexif()) == {}
+    result.close()
+    assert b"iPhoneSecret" not in jpeg
+
+
+def test_decode_multiframe_heic_takes_first_frame():
+    """Burst-style HEIC files carry several frames; only one must be used."""
+    if not _HEIF_AVAILABLE:
+        pytest.skip("pillow-heif not installed")
+    frames = [Image.new("RGB", (200, 150), (i * 60, 90, 120)) for i in range(3)]
+    buffer = io.BytesIO()
+    frames[0].save(buffer, format="HEIF", save_all=True, append_images=frames[1:])
+    for frame in frames:
+        frame.close()
+
+    jpeg, _ = decode_and_normalize(buffer.getvalue(), max_side=1280)
+    result = Image.open(io.BytesIO(jpeg))
+    assert result.size == (200, 150)
+    result.close()
+
+
+def test_heic_is_listed_as_accepted():
+    assert "HEIF" in ACCEPTED_FORMATS
+    assert "AVIF" in ACCEPTED_FORMATS
+
+
+def test_unsupported_message_lists_every_accepted_family():
+    """The 415 hint must not understate what the endpoint accepts."""
+    from fishagent.core.image_guard import _UNSUPPORTED_MESSAGE
+
+    for token in ("JPEG", "PNG", "WEBP", "GIF", "HEIC"):
+        assert token in _UNSUPPORTED_MESSAGE, f"415 hint omits {token}"
+
+
+def test_identify_endpoint_accepts_heic_upload(client):
+    if not _HEIF_AVAILABLE:
+        pytest.skip("pillow-heif not installed")
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("IMG_0001.HEIC", _heif_bytes(), "image/heic")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["identified"] is True
 
 
 def test_decode_rejects_decompression_bomb():

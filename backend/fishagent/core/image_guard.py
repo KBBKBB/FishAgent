@@ -17,7 +17,18 @@ from PIL import Image, UnidentifiedImageError
 
 from fishagent.errors import ApiError
 
-ACCEPTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF"})
+# HEIF/AVIF come from ``pillow-heif``: iPhones shoot HEIC by default, and Safari
+# only sometimes transcodes on upload, so a photo picked from Files can arrive
+# as-is. Registering the opener is what makes Pillow able to decode them at all.
+try:  # pragma: no cover - exercised by the HEIC tests when the extra is present
+    import pillow_heif
+
+    pillow_heif.register_heif_opener()
+    _HEIF_AVAILABLE = True
+except ImportError:  # pragma: no cover - the dependency is declared, not optional
+    _HEIF_AVAILABLE = False
+
+ACCEPTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "HEIF", "AVIF"})
 
 # 40 megapixels accepts a 4000x3000 phone photo (~12 MP) with headroom while
 # still rejecting decompression bombs. Pillow raises a hard
@@ -30,7 +41,7 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 JPEG_QUALITY = 85
 READ_CHUNK_BYTES = 64 * 1024
 
-_UNSUPPORTED_MESSAGE = "不支持的图片格式，请上传 JPEG/PNG/WEBP/GIF 图片"
+_UNSUPPORTED_MESSAGE = "不支持的图片格式，请上传 JPEG/PNG/WEBP/GIF/HEIC 图片"
 
 
 class AsyncByteReader(Protocol):

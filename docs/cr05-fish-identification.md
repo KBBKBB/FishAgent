@@ -96,7 +96,7 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 
 1. 读入上限 `max_upload_bytes`，超限直接 413（读取时即截断，不整体载入内存）。
 2. 用 Pillow 实际解码校验，不信任 `Content-Type` 与扩展名：
-   - 仅接受 JPEG / PNG / WEBP / GIF
+   - 仅接受 JPEG / PNG / WEBP / GIF / HEIF / AVIF。其中 HEIF（即 iPhone 的 HEIC）与 AVIF 由 `pillow-heif` 提供解码能力——Safari 在上传时不保证转码，从「文件」App 选取的照片可能原样送达，因此必须由服务端直接支持。
    - 设置 `Image.MAX_IMAGE_PIXELS` 防解压炸弹，超限 415
    - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此上限不宜设得过低（建议 ≥ 4000 万像素），否则会误拒正常手机照片；同时必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
 3. 最长边缩放到 `max_side`（默认 1280），转 RGB，重新编码 JPEG quality=85。
@@ -150,7 +150,7 @@ System prompt 要求模型输出：
 
 ## 7. 依赖
 
-`pyproject.toml` 新增：`python-multipart>=0.0.9`、`pillow>=10`。
+`pyproject.toml` 新增：`python-multipart>=0.0.9`、`pillow>=10`、`pillow-heif>=0.16`（HEIC/AVIF 解码）。
 
 ## 8. 合规
 

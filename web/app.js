@@ -1325,7 +1325,8 @@
   function identifyErrorMessage(error) {
     var status = error ? Number(error.status) : 0;
     if (status === 413) return IDENTIFY_MAX_BYTES_TEXT;
-    if (status === 415) return '不支持的图片格式，请换一张 JPG/PNG 图片';
+    // Keep this in step with ACCEPTED_FORMATS in core/image_guard.py.
+    if (status === 415) return '不支持的图片格式，请换一张 JPG/PNG/WEBP/GIF/HEIC 图片';
     if (status === 429) {
       return (error && error.message) || rateLimitMessage(error && error.data, error && error.retryAfter);
     }

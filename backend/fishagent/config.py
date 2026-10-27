@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # memory (a 12 MP photo costs ~91 MB) rather than by a fixed slot count.
     # This budget is how many decoded photos' worth of RAM we accept at once.
     identify_decode_memory_budget_mb: int = Field(
-        default=1024,
+        default=1536,
         ge=256,
         le=8192,
         validation_alias="FISHAGENT_IDENTIFY_DECODE_MEMORY_BUDGET_MB",

@@ -65,7 +65,10 @@ READ_CHUNK_BYTES = 64 * 1024
 # photos thrash the CPU.
 DECODE_BYTES_PER_PIXEL = 7.5
 _MB = 1_000_000
-_DEFAULT_DECODE_MEMORY_BUDGET_MB = 1024
+# 1536 MB is sized so the CPU cap can actually bind on large photos: 4 slots ×
+# 366 MB (48 MP) ≈ 1464 MB, which a 1024 MB budget could never hold, leaving
+# two of the four slots permanently idle for large uploads.
+_DEFAULT_DECODE_MEMORY_BUDGET_MB = 1536
 _DEFAULT_MAX_CONCURRENT_DECODES = 4
 
 # Keyed by event loop: ``asyncio.Semaphore`` binds to the loop it first waits

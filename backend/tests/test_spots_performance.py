@@ -114,7 +114,7 @@ def test_stops_after_nearest_batch_meets_limit(client, install_overrides):
         "evaluated": 10,
         "unevaluated": 110,
     }
-    assert geo.drive_calls == 20
+    assert geo.drive_calls == 10
     assert 1 < geo.max_active <= get_settings().amap_concurrency
     assert all(spot["drive_seconds_round_trip"] <= 7200 for spot in payload["spots"])
 
@@ -134,7 +134,7 @@ def test_limit_ten_evaluates_one_ten_candidate_batch(client, install_overrides):
     assert filtered["returned"] == 10
     assert filtered["truncated_by_limit"] == 0
     assert filtered["unevaluated"] == 110
-    assert geo.drive_calls == 20
+    assert geo.drive_calls == 10
 
 
 def test_expands_evaluation_batches_until_limit_is_met(client, install_overrides):
@@ -160,7 +160,7 @@ def test_expands_evaluation_batches_until_limit_is_met(client, install_overrides
     assert filtered["over_two_hours"] == 25
     assert filtered["returned"] == 5
     assert filtered["truncated_by_limit"] == 0
-    assert geo.drive_calls == 60
+    assert geo.drive_calls == 30
 
 
 def test_unavailable_drives_are_counted_separately(client, install_overrides):
@@ -225,7 +225,7 @@ def test_offset_expands_evaluation_window(client, install_overrides):
         "evaluated": 20,
         "unevaluated": 100,
     }
-    assert geo.drive_calls == 40
+    assert geo.drive_calls == 20
 
 
 def test_max_offset_and_limit_reach_evaluation_cap(client, install_overrides):
@@ -243,7 +243,7 @@ def test_max_offset_and_limit_reach_evaluation_cap(client, install_overrides):
     assert filtered["returned"] == 10
     assert filtered["truncated_by_limit"] == 20
     assert filtered["unevaluated"] == 90
-    assert geo.drive_calls == 60
+    assert geo.drive_calls == 30
 
 
 def test_offset_beyond_eligible_returns_empty_page(client, install_overrides):
@@ -283,3 +283,72 @@ def test_mock_mode_still_evaluates_every_candidate(client):
         "mock_spot_006",
         "mock_spot_004",
     ]
+
+
+# --- latency regression guards ----------------------------------------------
+#
+# A cold recommendation took 14 s: every evaluated candidate issued two
+# identical AMap requests (the live provider ignores ``direction``) and nothing
+# was cached, so each page load paid the full cost again.
+
+
+def test_live_provider_issues_one_drive_call_per_candidate(client, install_overrides):
+    """Out and back must not both hit the quota-limited API."""
+    geo = FakeGeoProvider(make_candidates(30), lambda index: 300)
+    install_overrides(geo)
+
+    get_spots(client, limit=10)
+
+    # 10 evaluated candidates -> 10 calls, not 20.
+    assert geo.drive_calls == 10
+
+
+def test_provider_that_uses_direction_still_gets_both_calls(client, install_overrides):
+    """A provider whose result depends on direction must not be short-changed."""
+    geo = FakeGeoProvider(make_candidates(30), lambda index: 300)
+    geo.direction_affects_result = True
+    install_overrides(geo)
+
+    get_spots(client, limit=10)
+
+    assert geo.drive_calls == 20, "direction-sensitive providers need out and back"
+
+
+def test_repeat_request_is_served_from_cache(client, install_overrides):
+    """The page refetches on every load; the second one must not re-evaluate."""
+    geo = FakeGeoProvider(make_candidates(30), lambda index: 300)
+    install_overrides(geo)
+
+    first = get_spots(client, limit=10)
+    calls_after_first = geo.drive_calls
+    second = get_spots(client, limit=10)
+
+    assert geo.drive_calls == calls_after_first, "cached response must not re-query AMap"
+    assert [s["id"] for s in second["spots"]] == [s["id"] for s in first["spots"]]
+
+
+def test_cache_key_separates_radius_and_limit(client, install_overrides):
+    """A different radius is a different question and must not be cache-served."""
+    geo = FakeGeoProvider(make_candidates(30), lambda index: 300)
+    install_overrides(geo)
+
+    get_spots(client, limit=10, radius_km=50)
+    after_first = geo.drive_calls
+    get_spots(client, limit=5, radius_km=20)
+
+    assert geo.drive_calls > after_first, "changed parameters must bypass the cache"
+
+
+def test_cache_expires(client, install_overrides, monkeypatch):
+    """A stale entry must be recomputed rather than served indefinitely."""
+    import fishagent.services.spots as spots_service
+
+    geo = FakeGeoProvider(make_candidates(30), lambda index: 300)
+    install_overrides(geo)
+    monkeypatch.setattr(spots_service, "_CACHE_TTL_SECONDS", 0, raising=True)
+
+    get_spots(client, limit=10)
+    after_first = geo.drive_calls
+    get_spots(client, limit=10)
+
+    assert geo.drive_calls > after_first, "TTL 0 must disable caching"

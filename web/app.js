@@ -11,6 +11,11 @@
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
   var SPECIES_TIMEOUT_MS = 4500;
+  // 鱼情分析要拉实时天气，正常 1.5-4s。
+  var ACTIVITY_TIMEOUT_MS = 15000;
+  // 钓位推荐每条候选都要调高德路径规划，而高德账号硬性限制 2 QPS，
+  // 10 个候选冷启动约 10s。给足余量，超时后提示"较慢"而不是"不可用"。
+  var SPOTS_TIMEOUT_MS = 45000;
   var IDENTIFY_TIMEOUT_MS = 60000;
   var IDENTIFY_MAX_BYTES = 8 * 1024 * 1024;
   var IDENTIFY_MAX_NOTE = 100;
@@ -508,7 +513,9 @@
           lat: state.lat,
           lon: state.lon,
           location_name: state.name
-        })
+        }),
+        {},
+        { timeoutMs: ACTIVITY_TIMEOUT_MS }
       );
       if (seq !== state.seq) return;
       renderActivity(data);
@@ -527,7 +534,9 @@
         lon: state.lon,
         radius_km: state.radiusKm,
         limit: SPOT_FETCH_LIMIT
-      })
+      }),
+      {},
+      { timeoutMs: SPOTS_TIMEOUT_MS }
     );
   }
 
@@ -631,27 +640,48 @@
     state.spotsHintTimer = setTimeout(function () {
       state.spotsHintTimer = null;
       if (body.getAttribute('aria-busy') !== 'true') return;
+      // 高德账号硬限 2 QPS，每个候选一次路径规划，10 个候选约 10 秒。
       var line = body.querySelector('.placeholder p');
-      if (line) line.textContent = '正在规划车程，真实模式约需 20 秒';
+      if (line) line.textContent = '正在逐个规划车程，真实模式约需 10 秒…';
     }, 3000);
   }
 
-  function renderActivityError(error) {
-    var body = $('activity-body');
+  // 超时和"服务真的挂了"是两回事：超时的请求后端往往还在算。
+  // 混为一谈会让用户以为功能坏了，其实再等一会儿或刷新就有。
+  function isTimeoutError(error) {
+    return !!error && (error.code === 'TIMEOUT' || Number(error.status) === 0);
+  }
+
+  function renderSectionError(body, title, error, timeoutHint) {
     var box = el('div', 'empty');
-    box.append(el('p', null, '鱼情分析暂时不可用'));
-    box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
+    if (isTimeoutError(error)) {
+      box.append(el('p', null, title + '响应较慢'));
+      box.append(el('p', 'hint', timeoutHint));
+      box.append(el('p', 'hint', '再点一次"刷新"通常就能看到结果。'));
+    } else {
+      box.append(el('p', null, title + '暂时不可用'));
+      box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
+    }
     body.replaceChildren(box);
     body.setAttribute('aria-busy', 'false');
   }
 
+  function renderActivityError(error) {
+    renderSectionError(
+      $('activity-body'),
+      '鱼情分析',
+      error,
+      '正在获取实时天气与气压数据，网络较慢时会更久一些。'
+    );
+  }
+
   function renderSpotsError(error) {
-    var body = $('spots-body');
-    var box = el('div', 'empty');
-    box.append(el('p', null, '钓位推荐暂时不可用'));
-    box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
-    body.replaceChildren(box);
-    body.setAttribute('aria-busy', 'false');
+    renderSectionError(
+      $('spots-body'),
+      '钓位推荐',
+      error,
+      '要为每个候选钓位规划实时车程，耗时较长属于正常现象。'
+    );
   }
 
   function renderActivity(data) {

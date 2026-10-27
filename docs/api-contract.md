@@ -10,6 +10,7 @@
 > v1.6（2026-10-25）：同步第二轮修复口径——降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；补物种相关配置与注入点。
 > v1.7（2026-10-26）：Phase 2 三阶段并发化 + 加深截止时间；页预算 6→12、LLM 调用 4→2；LLM 抽取计入每日配额并按 4.6 降级；未注册 API 路径的违规方法改为 404。
 > v1.8（2026-10-27）：新增 `POST /api/agent/identify-fish`（图片识别鱼种，CR-05）；见 4.7 与 `cr05-fish-identification.md`。
+> v1.9（2026-10-27）：`/api/spots/recommend` 增加 180s 结果缓存（按四舍五入坐标/半径/limit/物种/offset 分键）；单候选去程与回程合并为一次调用（真实高德 provider 忽略 `direction`），评估期调用数减半；冷启动 14.8s → 8.1s，热命中 <20ms。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -252,7 +253,9 @@ fixtures/                         # 小产：演示场景
 - **真实模式评估口径**：候选先按直线距离排序；对最近 ≤100 个候选调用一次高德 `/v3/distance`（单终点、最多 100 起点）按回程时长重排；随后按批次（默认 `max(limit, 10)`，评估上限 30 个候选）对入围候选做去/回程分别路径精算，凑够 `offset+limit` 个合格候选即停（`offset+limit ≤ 30`）。批量距离仅用于排序，不替代去/回程精算；回程/去程值在基线路况下可能相同，但始终各调用一次。`unavailable` 表示路径规划失败，保守排除。
 - **分页口径**：按 `total_score` 降序（同分按往返时长升序）排序后返回 `eligible[offset:offset+limit]`；`offset=0` 与旧版首屏一致。每次请求重新召回、评估并排序，不做缓存；因此两次请求之间若路况/天气变化，批次内容可能变化，仅保证单次响应内无重复。
 - `truncated_by_limit = eligible - returned` 涵盖 `offset` 前被跳过的合格候选与窗口外剩余候选；`eligible = returned + truncated_by_limit` 不变式继续成立。`forbidden=0` 仅为未命中规则的事实字段，不代表“均可钓”。
-- **有界并发与限速**：召回分片与路径规划共享并发信号量（`FISHAGENT_AMAP_CONCURRENCY`，默认 6）与请求起间隔（`FISHAGENT_AMAP_QPS`，默认 2）；Mock 不受影响。
+- **有界并发与限速**：召回分片与路径规划共享并发信号量（`FISHAGENT_AMAP_CONCURRENCY`，默认 6）与请求起间隔（`FISHAGENT_AMAP_QPS`，默认 2）；Mock 不受影响。**QPS=2 是高德账号的硬限制**，实测调高会返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`，因此提高并发数对总耗时无效（实测 6/12/20 并发均为 14s 量级）。
+- **去程/回程只算一次**：真实 `AMapGeoProvider.estimate_drive_seconds` 忽略 `direction` 参数，去程与回程是对同一 origin/destination 的完全相同请求。服务层因此只发一次（`direction_affects_result=False`），往返时间按 2 倍展示。Mock 区分去/回程（`_TRAVEL_FACTORS`），故保留两次调用。
+- **结果缓存**：`GET /api/spots/recommend` 按 (坐标四舍五入 3 位、radius_km、limit、species、offset) 缓存 180s（`_CACHE_TTL_SECONDS`），LRU 上限 256 条。车程是基线估算，几分钟内变化在噪声范围内。实测冷启动 14.8s → 8.1s，热命中 <20ms。
 - `filtered` 口径（固定顺序）：`total_candidates` = 召回并去重后的候选总数（进入过滤前的基数）；先禁钓过滤，再对评估窗口做往返过滤，最后排序截断。保持不变式：
   `total_candidates = forbidden + evaluated + unevaluated`；
   `evaluated = unavailable + over_two_hours + eligible`；
@@ -436,3 +439,4 @@ cd backend
 | v1.6 | 2026-10-25 | 同步第二轮修复口径：降级必为全空、结构异常整体降级、负缓存 300s、缓存键归一化、`CancelledError` 上抛；配额异常裁决为降级 200；补物种相关配置与注入点 | CR-04 实现收敛 |
 | v1.7 | 2026-10-26 | Phase 2 串行改并发（检索/抓页/加深三阶段）、每请求页预算 6→12、LLM 调用 4→2、加深阶段截止时间与单次调用限时；LLM 抽取计入每日配额并按 4.6 降级；明确未知 API 路径 404/405 语义 | 5 钓位批量冷启动 4.1s 撞 4s 超时导致整批降级；未注册路径的 POST 误报英文 405 |
 | v1.8 | 2026-10-27 | 新增图片识别鱼种端点（multipart 上传、图片内存内规范化与 EXIF 丢弃、视觉模型抽取、占位词与承诺性表述防护、配额返 429） | CR-05：Agent 板块支持拍照/上传识别鱼种 |
+| v1.9 | 2026-10-27 | `/api/spots/recommend` 结果缓存 180s + 去/回程调用合并；冷启动 14.8s→8.1s，热命中 <20ms | 手机端「附近钓位」需等 14s 才出结果，被用户当成服务不可用 |

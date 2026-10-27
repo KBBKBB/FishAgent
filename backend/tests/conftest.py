@@ -74,6 +74,21 @@ def client(app):
         yield test_client
 
 
+@pytest.fixture(autouse=True)
+def _clear_service_caches():
+    """Isolate tests from the process-wide caches in the service layer.
+
+    Spot recommendations are cached for 180 s, so without this a test that
+    queries the same location would silently assert against the previous
+    test's response.
+    """
+    from fishagent.services.spots import reset_spot_cache
+
+    reset_spot_cache()
+    yield
+    reset_spot_cache()
+
+
 def fish_params(**overrides: Any) -> dict[str, Any]:
     params: dict[str, Any] = {**HANGZHOU, "at": AT_UTC}
     params.update(overrides)

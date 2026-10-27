@@ -22,6 +22,7 @@ from fishagent.core.image_guard import (
     _HEIF_AVAILABLE,
     ACCEPTED_FORMATS,
     MAX_IMAGE_PIXELS,
+    _DecodeAdmission,
     decode_and_normalize,
     prepare_image,
     read_upload,
@@ -318,15 +319,15 @@ def test_decode_accepts_normal_phone_photo_size():
     result.close()
 
 
-# --- decode concurrency -----------------------------------------------------
+# --- decode admission -------------------------------------------------------
 #
-# A 48 MP decode peaks around 356 MB, so the semaphore is the only thing
-# standing between N concurrent uploads and N * 356 MB. These tests assert peak
+# Decoding is the memory cost (~7.5 bytes/pixel, measured), so admission is
+# priced per photo rather than by a fixed slot count. These tests assert peak
 # concurrency directly rather than wall-clock time, which is machine-dependent.
 
 
 def _track_decodes(monkeypatch, gate: float = 0.05):
-    """Wrap decode_and_normalize to record how many run at once."""
+    """Stub decode_and_normalize to record how many run at once."""
     state = {"current": 0, "peak": 0, "calls": 0}
 
     def fake_decode(data, *, max_side):
@@ -345,82 +346,155 @@ def _track_decodes(monkeypatch, gate: float = 0.05):
     return state
 
 
-def test_decode_concurrency_is_capped(monkeypatch):
-    """Four simultaneous uploads must never decode more than two at once."""
+def _jpeg_of(size: tuple[int, int]) -> bytes:
+    image = Image.new("RGB", size, (20, 60, 90))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=40)
+    image.close()
+    return buffer.getvalue()
+
+
+def _prepare(payload: bytes, **kwargs):
+    async def one():
+        return await prepare_image(
+            _Upload(payload),
+            max_upload_bytes=64 * 1024 * 1024,
+            max_side=1280,
+            **kwargs,
+        )
+
+    return one()
+
+
+def _gather(payload: bytes, count: int, **kwargs):
+    async def all_of_them():
+        return await asyncio.gather(
+            *(_prepare(payload, **kwargs) for _ in range(count))
+        )
+
+    return run(all_of_them())
+
+
+# --- weight estimation ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "low", "high"),
+    [
+        (4032, 3024, 80, 100),  # 12 MP measured ~91 MB
+        (5712, 4284, 165, 195),  # 24 MP measured ~179 MB
+        (8064, 6048, 330, 380),  # 48 MP measured ~356 MB
+        (12000, 6000, 500, 550),  # 72 MP measured ~524 MB
+    ],
+)
+def test_weight_estimate_tracks_the_measured_peak(width, height, low, high):
+    """The estimate must stay close to real RSS, or the budget is fiction."""
+    admission = _DecodeAdmission(max_concurrent=4, budget_mb=8192)
+    weight = admission.weight_for(width, height)
+    assert low <= weight <= high, f"{width}x{height} priced at {weight} MB"
+
+
+def test_weight_is_clamped_to_the_budget():
+    """An oversized request must not wait forever for more than the budget."""
+    admission = _DecodeAdmission(max_concurrent=1, budget_mb=256)
+    assert admission.weight_for(8000, 6000) == 256
+
+
+def test_weight_of_unknown_size_is_the_minimum():
+    admission = _DecodeAdmission(max_concurrent=1, budget_mb=256)
+    assert admission.weight_for(0, 0) == 1
+
+
+# --- admission behaviour ----------------------------------------------------
+
+
+def test_small_photos_run_concurrently_within_the_memory_budget(monkeypatch):
+    """Four 12 MP photos (~364 MB) fit in a 1 GB budget, so all run together."""
     state = _track_decodes(monkeypatch, gate=0.05)
-    payload = _png()
+    payload = _jpeg_of((4032, 3024))  # 12 MP -> ~91 MB each
 
-    async def upload_all():
-        async def one():
-            return await prepare_image(
-                _Upload(payload),
-                max_upload_bytes=10 * 1024 * 1024,
-                max_side=1280,
-                max_concurrent_decodes=2,
-            )
-
-        return await asyncio.gather(*(one() for _ in range(4)))
-
-    results = run(upload_all())
+    results = _gather(
+        payload, 4, max_concurrent_decodes=4, decode_memory_budget_mb=1024
+    )
 
     assert len(results) == 4
-    assert state["calls"] == 4, "every upload must still be decoded"
-    assert state["peak"] == 2, f"peak concurrency was {state['peak']}, expected 2"
+    assert state["calls"] == 4
+    assert state["peak"] == 4, "small photos must not serialise on memory"
 
 
-def test_decode_concurrency_of_one_serialises(monkeypatch):
-    state = _track_decodes(monkeypatch, gate=0.02)
-    payload = _png()
+def test_large_photos_serialise_on_the_memory_budget(monkeypatch):
+    """Two 48 MP photos (~356 MB each) cannot fit a 512 MB budget together."""
+    state = _track_decodes(monkeypatch, gate=0.05)
+    payload = _jpeg_of((8064, 6048))
 
-    async def run_serial():
-        async def one():
-            return await prepare_image(
-                _Upload(payload),
-                max_upload_bytes=10 * 1024 * 1024,
-                max_side=1280,
-                max_concurrent_decodes=1,
-            )
+    _gather(payload, 2, max_concurrent_decodes=8, decode_memory_budget_mb=512)
 
-        return await asyncio.gather(*(one() for _ in range(3)))
-
-    run(run_serial())
-    assert state["peak"] == 1
+    assert state["calls"] == 2, "both must still be decoded, just not at once"
+    assert state["peak"] == 1, "memory budget must serialise large photos"
 
 
-def test_decode_semaphore_survives_a_second_event_loop(monkeypatch):
+def test_count_cap_applies_even_when_memory_is_plentiful(monkeypatch):
+    """Small photos are cheap in RAM but each still burns a CPU core."""
+    state = _track_decodes(monkeypatch, gate=0.05)
+    payload = _jpeg_of((800, 600))
+
+    _gather(payload, 6, max_concurrent_decodes=2, decode_memory_budget_mb=4096)
+
+    assert state["calls"] == 6
+    assert state["peak"] == 2, "the CPU cap must bind independently of memory"
+
+
+def test_mixed_sizes_share_the_budget(monkeypatch):
+    """A big photo must not be admitted beside another when it exhausts the budget."""
+    state = _track_decodes(monkeypatch, gate=0.05)
+    big = _jpeg_of((8064, 6048))  # ~366 MB at 7.5 bytes/px
+    small = _jpeg_of((800, 600))  # ~4 MB
+
+    # 360 MB cannot hold 366 + 4, so the pair must serialise even though the
+    # count cap (4) would happily admit both.
+    async def mixed():
+        return await asyncio.gather(
+            _prepare(big, max_concurrent_decodes=4, decode_memory_budget_mb=360),
+            _prepare(small, max_concurrent_decodes=4, decode_memory_budget_mb=360),
+        )
+
+    run(mixed())
+    assert state["calls"] == 2
+    assert state["peak"] == 1, "the 360 MB budget cannot hold the 366 MB photo plus another"
+
+
+def test_a_photo_larger_than_the_budget_still_runs(monkeypatch):
+    """70 MP exceeds a small budget; clamping must let it through, not hang."""
+    state = _track_decodes(monkeypatch, gate=0.01)
+    huge = _jpeg_of((10800, 6000))  # ~486 MB estimated
+
+    assert run(_prepare(huge, decode_memory_budget_mb=256))
+    assert state["calls"] == 1
+
+
+def test_admission_survives_a_second_event_loop(monkeypatch):
     """Each ``asyncio.run`` is a fresh loop; a global semaphore would explode."""
     _track_decodes(monkeypatch)
 
-    async def once():
-        return await prepare_image(
-            _Upload(_png()),
-            max_upload_bytes=10 * 1024 * 1024,
-            max_side=1280,
-            max_concurrent_decodes=2,
-        )
-
-    assert run(once())
-    assert run(once()), "second run() on a new loop must not raise"
+    assert run(_prepare(_png()))
+    assert run(_prepare(_png())), "second run() on a new loop must not raise"
 
 
 def test_zero_concurrency_is_coerced_to_one(monkeypatch):
     """A misconfigured 0 must not deadlock every upload."""
     state = _track_decodes(monkeypatch)
 
-    async def once():
-        return await prepare_image(
-            _Upload(_png()),
-            max_upload_bytes=10 * 1024 * 1024,
-            max_side=1280,
-            max_concurrent_decodes=0,
-        )
-
-    assert run(once())
+    assert run(_prepare(_png(), max_concurrent_decodes=0))
     assert state["calls"] == 1
 
 
-def test_oversized_upload_never_takes_a_decode_slot(monkeypatch):
-    """The size check must reject before a decode workspace is reserved."""
+def test_zero_memory_budget_cannot_deadlock():
+    """A 0 MB budget would make every acquire block forever if not clamped."""
+    assert run(_prepare(_png(), decode_memory_budget_mb=0))
+
+
+def test_oversized_upload_never_claims_a_decode_slot(monkeypatch):
+    """The size check must reject before any admission happens."""
     state = _track_decodes(monkeypatch)
 
     async def once():
@@ -428,7 +502,6 @@ def test_oversized_upload_never_takes_a_decode_slot(monkeypatch):
             _Upload(b"x" * 4096),
             max_upload_bytes=1024,
             max_side=1280,
-            max_concurrent_decodes=2,
         )
 
     with pytest.raises(ApiError) as excinfo:

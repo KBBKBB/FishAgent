@@ -84,11 +84,19 @@ class Settings(BaseSettings):
         le=180,
         validation_alias="FISHAGENT_IDENTIFY_TIMEOUT_SECONDS",
     )
-    # Decoding a 48 MP photo peaks around 356 MB, so concurrency is bounded by
-    # memory, not CPU. Two slots keeps the worst case near ~700 MB; raise only
-    # with headroom measured on the target host.
+    # Decoding a 48 MP photo peaks around 356 MB, so admission is priced by
+    # memory (a 12 MP photo costs ~91 MB) rather than by a fixed slot count.
+    # This budget is how many decoded photos' worth of RAM we accept at once.
+    identify_decode_memory_budget_mb: int = Field(
+        default=1024,
+        ge=256,
+        le=8192,
+        validation_alias="FISHAGENT_IDENTIFY_DECODE_MEMORY_BUDGET_MB",
+    )
+    # A separate cap because decoding is CPU-bound (~1 s for 48 MP on one core);
+    # memory headroom alone would let many small photos thrash the CPU.
     identify_max_concurrent_decodes: int = Field(
-        default=2,
+        default=4,
         ge=1,
         le=8,
         validation_alias="FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES",

@@ -14,6 +14,7 @@ import logging
 import time
 import warnings
 import weakref
+from contextlib import asynccontextmanager
 from typing import Protocol
 
 from PIL import Image, UnidentifiedImageError
@@ -51,26 +52,88 @@ Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 JPEG_QUALITY = 85
 READ_CHUNK_BYTES = 64 * 1024
 
-# Decoding is where the memory goes: a full-resolution 48 MP HEIC peaks around
-# 356 MB and 72 MP around 524 MB, and ``draft()`` does not work for HEIF, so
-# there is no cheaper downsample-on-decode path. Several concurrent uploads
-# would otherwise multiply that. The semaphore is keyed by event loop because
-# ``asyncio.Semaphore`` binds to the loop it first waits on — a single global
-# instance raises "bound to a different event loop" wherever a second loop
-# exists (every test using ``asyncio.run``).
-_DEFAULT_MAX_CONCURRENT_DECODES = 2
-_DECODE_SLOTS: weakref.WeakKeyDictionary[
-    asyncio.AbstractEventLoop, tuple[int, asyncio.Semaphore]
+# Decoding is where the memory goes, and ``draft()`` does not work for HEIF, so
+# there is no cheaper downsample-on-decode path. Measured peak RSS delta per
+# decode is ~7.3 bytes per pixel — 12 MP ≈ 91 MB, 24 MP ≈ 179 MB, 48 MP ≈ 356 MB,
+# 72 MP ≈ 524 MB — which is very close to linear, so a photo's cost is
+# predictable from its header alone.
+#
+# Admission is therefore priced by memory, not by a fixed slot count: a 12 MP
+# photo is cheap enough to decode several at a time, while an 80 MP one must
+# run alone. The count cap exists separately because decoding is CPU-bound
+# (48 MP takes ~1 s on one core), so memory headroom alone would let small
+# photos thrash the CPU.
+DECODE_BYTES_PER_PIXEL = 7.5
+_MB = 1_000_000
+_DEFAULT_DECODE_MEMORY_BUDGET_MB = 1024
+_DEFAULT_MAX_CONCURRENT_DECODES = 4
+
+# Keyed by event loop: ``asyncio.Semaphore`` binds to the loop it first waits
+# on, so a single global instance raises "bound to a different event loop"
+# wherever a second loop exists (every test using ``asyncio.run``).
+_DECODE_ADMISSION: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, tuple[tuple[int, int], _DecodeAdmission]
 ] = weakref.WeakKeyDictionary()
 
 
-def _decode_semaphore(limit: int) -> asyncio.Semaphore:
+class _DecodeAdmission:
+    """Weighted admission control: a concurrent-decode cap plus a memory budget.
+
+    Deliberately hand-rolled: ``asyncio.Semaphore`` cannot be acquired with a
+    weight (only ``threading.Semaphore`` can), so pricing each decode by
+    megabytes needs an explicit condition. Checking both constraints under one
+    lock also means there is no acquire ordering to get wrong, so the pair
+    cannot deadlock against each other.
+    """
+
+    def __init__(self, max_concurrent: int, budget_mb: int) -> None:
+        self.max_concurrent = max_concurrent
+        self.budget_mb = budget_mb
+        self._active = 0
+        self._in_use_mb = 0
+        self._cond = asyncio.Condition()
+
+    def weight_for(self, width: int, height: int) -> int:
+        """Megabytes this decode is expected to claim, clamped to the budget.
+
+        Clamping matters: a request larger than the entire budget could never
+        be admitted, so it would wait forever rather than fail.
+        """
+        if width <= 0 or height <= 0:
+            return 1  # unknown header; assume the cheapest ticket
+        estimated = (width * height) * DECODE_BYTES_PER_PIXEL / _MB
+        return max(1, min(int(estimated + 0.999), self.budget_mb))
+
+    @asynccontextmanager
+    async def admit(self, weight_mb: int):
+        async with self._cond:
+            while not (
+                self._active < self.max_concurrent
+                and self._in_use_mb + weight_mb <= self.budget_mb
+            ):
+                await self._cond.wait()
+            self._active += 1
+            self._in_use_mb += weight_mb
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._active -= 1
+                self._in_use_mb -= weight_mb
+                # notify_all, not notify(1): waiters have different sizes, so
+                # the one woken arbitrarily may still not fit and would stall
+                # the whole queue behind it.
+                self._cond.notify_all()
+
+
+def _decode_admission(max_concurrent: int, budget_mb: int) -> _DecodeAdmission:
     loop = asyncio.get_running_loop()
-    entry = _DECODE_SLOTS.get(loop)
-    if entry is None or entry[0] != limit:
-        semaphore = asyncio.Semaphore(limit)
-        _DECODE_SLOTS[loop] = (limit, semaphore)
-        return semaphore
+    key = (max_concurrent, budget_mb)
+    entry = _DECODE_ADMISSION.get(loop)
+    if entry is None or entry[0] != key:
+        admission = _DecodeAdmission(max_concurrent, budget_mb)
+        _DECODE_ADMISSION[loop] = (key, admission)
+        return admission
     return entry[1]
 
 _UNSUPPORTED_MESSAGE = "不支持的图片格式，请上传 JPEG/PNG/WEBP/GIF/HEIC 图片"
@@ -189,24 +252,35 @@ async def prepare_image(
     max_upload_bytes: int,
     max_side: int,
     max_concurrent_decodes: int = _DEFAULT_MAX_CONCURRENT_DECODES,
+    decode_memory_budget_mb: int = _DEFAULT_DECODE_MEMORY_BUDGET_MB,
 ) -> tuple[bytes, str]:
     """Read a streamed upload and normalise it off the event loop.
 
-    Decoding runs under a process-wide semaphore so concurrent uploads cannot
-    each claim hundreds of megabytes at once. The read loop stays outside the
-    slot and keeps streaming into a bounded buffer while it waits, so a queued
-    upload costs only its bytes, not a decode workspace.
+    Admission is priced per photo: the header is peeked first (0.1 ms, no pixel
+    decode) so a small photo can be admitted alongside others while an 80 MP
+    one waits for the budget to clear. The streaming read and the header peek
+    both happen outside admission, so a queued upload holds only its bytes.
     """
     data = await read_upload(upload, max_upload_bytes=max_upload_bytes)
-    limit = max(1, int(max_concurrent_decodes))
-    semaphore = _decode_semaphore(limit)
-    if semaphore.locked():
-        logger.info("decode queue: no free slot, waiting (limit=%d)", limit)
-    waited = time.monotonic()
-    async with semaphore:
-        queued = time.monotonic() - waited
+    width, height = _peek_size(data)
+    admission = _decode_admission(
+        max(1, int(max_concurrent_decodes)),
+        max(1, int(decode_memory_budget_mb)),
+    )
+    weight = admission.weight_for(width, height)
+    logger.info(
+        "decode admission: %sx%s ~%d MB of %d MB budget (%d slots)",
+        width,
+        height,
+        weight,
+        admission.budget_mb,
+        admission.max_concurrent,
+    )
+    started = time.monotonic()
+    async with admission.admit(weight):
+        queued = time.monotonic() - started
         if queued >= 0.1:
-            logger.info("decode queue: waited %.2fs for a slot", queued)
+            logger.info("decode queue: waited %.2fs for %d MB", queued, weight)
         return await asyncio.to_thread(decode_and_normalize, data, max_side=max_side)
 
 

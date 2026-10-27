@@ -124,6 +124,7 @@ async def identify_fish(
         max_upload_bytes=settings.identify_max_upload_bytes,
         max_side=settings.identify_max_side,
         max_concurrent_decodes=settings.identify_max_concurrent_decodes,
+        decode_memory_budget_mb=settings.identify_decode_memory_budget_mb,
     )
 
     if settings.mock_mode:

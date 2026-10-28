@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump CACHE_VERSION whenever a precached shell asset changes.
-var CACHE_VERSION = 'fishagent-v11';
+var CACHE_VERSION = 'fishagent-v12';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var PRECACHE_URLS = [
   '/',
@@ -102,13 +102,20 @@ function handleNavigation(request) {
     });
 }
 
+// Shell assets are the code itself: app.js, styles.css, index.html. They must
+// be network-first. Stale-while-revalidate served the cached copy first on
+// every load and only refreshed in the background, so a phone that never fully
+// closed the page kept executing the previous app.js — a deploy was invisible
+// until the user happened to load the page twice. Cache-first is right for
+// icons and the manifest (they never carry behaviour), wrong for code.
+var SHELL_PATHS = ['/app.js', '/styles.css', '/index.html'];
+
 function handleStatic(request) {
-  // Stale-while-revalidate: serve the cached copy immediately for speed, then
-  // refresh it in the background. Pure cache-first meant a cached app.js was
-  // never re-fetched, so a new deployment could not reach an installed client
-  // even after CACHE_VERSION was bumped.
+  var url = new URL(request.url);
+  var isShell = SHELL_PATHS.indexOf(url.pathname) !== -1;
+
   return caches.match(request).then(function (cached) {
-    var network = fetch(request)
+    var network = fetch(request, isShell ? { cache: 'no-store' } : undefined)
       .then(function (response) {
         if (response && response.ok && response.type === 'basic') {
           var copy = response.clone();
@@ -121,7 +128,10 @@ function handleStatic(request) {
       .catch(function () {
         return cached || new Response('', { status: 504, statusText: 'Offline' });
       });
-    return cached || network;
+    // Shell: wait for the network (it is a few tens of KB on the same origin),
+    // and fall back to cache only when offline. Everything else keeps the
+    // instant-from-cache path.
+    return isShell ? network : cached || network;
   });
 }
 

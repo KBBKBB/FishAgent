@@ -73,6 +73,362 @@
     return node;
   }
 
+  // --- 图片大图查看 -----------------------------------------------------
+  //
+  // 对话里的缩略图只有 168px，看不出鱼的特征，需要点开看原图。这里刻意
+  // 不引入图片地址缓存：缩略图在加载完成后就会 revokeObjectURL（见
+  // appendUserImageMessage），所以查看器的地址是打开时按 File 现造的，
+  // 关闭前再释放。图片始终只活在内存里，不落盘、不进 localStorage，
+  // 与 cr05 §8 的隐私承诺一致。
+  var IMAGE_VIEWER_ID = 'image-viewer';
+  var MAX_ZOOM = 4;
+  // 单例：每次点开缩略图都新建一个 session 会重复挂监听、重复造 DOM。
+  var imageViewerSession = null;
+
+  function buildImageViewer() {
+    if (imageViewerSession) return imageViewerSession;
+
+    var viewer = el('div', 'image-viewer');
+    viewer.id = IMAGE_VIEWER_ID;
+    viewer.hidden = true;
+    viewer.setAttribute('role', 'dialog');
+    viewer.setAttribute('aria-modal', 'true');
+    viewer.setAttribute('aria-label', '查看照片大图');
+
+    // 图片包在可拖动的舞台里：放大后可以移动查看局部。
+    var stage = el('div', 'image-viewer-stage');
+    var image = el('img', 'image-viewer-img');
+    image.alt = '鱼获照片大图';
+    image.draggable = false;
+    stage.append(image);
+
+    var toolbar = el('div', 'image-viewer-toolbar');
+    var zoomOut = el('button', 'image-viewer-btn', '缩小');
+    zoomOut.type = 'button';
+    zoomOut.setAttribute('aria-label', '缩小图片');
+    var zoomReset = el('button', 'image-viewer-btn', '1:1');
+    zoomReset.type = 'button';
+    zoomReset.setAttribute('aria-label', '恢复原始大小');
+    var zoomIn = el('button', 'image-viewer-btn', '放大');
+    zoomIn.type = 'button';
+    zoomIn.setAttribute('aria-label', '放大图片');
+    var closeBtn = el('button', 'image-viewer-btn image-viewer-close', '关闭');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '关闭大图');
+    toolbar.append(zoomOut, zoomReset, zoomIn, closeBtn);
+
+    // 遮罩自身的读屏播报区。不能借用页面上的 status-region：它默认 hidden，
+    // 隐藏元素上的 aria-live 不会被读出来。
+    var liveRegion = el('p', 'image-viewer-live');
+    liveRegion.setAttribute('role', 'status');
+    liveRegion.setAttribute('aria-live', 'polite');
+
+    viewer.append(stage, toolbar, liveRegion);
+    document.body.append(viewer);
+
+    function announce(message) {
+      liveRegion.textContent = '';
+      // 同一句话连着播报两次，读屏不会重读，隔一帧再写入。
+      window.setTimeout(function () {
+        liveRegion.textContent = message;
+      }, 30);
+    }
+
+    var session = {
+      viewer: viewer,
+      stage: stage,
+      image: image,
+      url: null,
+      scale: 1,
+      // 平移量以**屏幕像素**记录，与缩放无关：translate 先于 scale 应用，
+      // 所以这个值就是手指移动的距离，不需要除以 scale。
+      panX: 0,
+      panY: 0,
+      // 拖动 / 双指缩放需要记住起点。
+      pointers: {},
+      dragStart: null,
+      pinchStart: null,
+      restoreFocus: null,
+      listeners: []
+    };
+
+    function clampScale(value) {
+      if (value > MAX_ZOOM) return MAX_ZOOM;
+      if (value < 1) return 1;
+      return value;
+    }
+
+    // transform 用 translate 在前、scale 在后的顺序：先缩放坐标系、再平移，
+    // 平移量才是纯屏幕像素。反过来写会让拖动距离被 scale 二次放大，
+    // 放大倍数越高手感越飘。
+    function applyTransform() {
+      if (session.scale <= 1) {
+        session.panX = 0;
+        session.panY = 0;
+      }
+      stage.style.transform =
+        'translate(' + session.panX + 'px, ' + session.panY + 'px) ' +
+        'scale(' + session.scale + ')';
+      zoomOut.disabled = session.scale <= 1;
+      zoomIn.disabled = session.scale >= MAX_ZOOM;
+      image.classList.toggle('is-zoomed', session.scale > 1);
+    }
+
+    function resetView() {
+      session.scale = 1;
+      session.panX = 0;
+      session.panY = 0;
+      applyTransform();
+    }
+
+    // 以某个屏幕点为锚点缩放：该点在缩放前后保持不动，捏合才不会"跑"。
+    //
+    // 变换是 translate(pan) · scale(s)，屏幕位置 p = pan + s·q，q 是相对
+    // 舞台中心的点。要求锚点不动：pan' + s'·q = pan + s·q，解得
+    // pan' = pan + (s - s')·q。q 必须由**缩放前**的 pan 反推。
+    function zoomAt(nextScale, anchor) {
+      var next = clampScale(nextScale);
+      if (next === session.scale) return;
+      if (anchor && session.scale > 0) {
+        var rect = viewer.getBoundingClientRect();
+        var qx = (anchor.x - (rect.left + rect.width / 2) - session.panX) / session.scale;
+        var qy = (anchor.y - (rect.top + rect.height / 2) - session.panY) / session.scale;
+        session.panX += (session.scale - next) * qx;
+        session.panY += (session.scale - next) * qy;
+      }
+      session.scale = next;
+      applyTransform();
+    }
+
+    function zoomCenter(nextScale) {
+      zoomAt(nextScale, null);
+    }
+
+    function close() {
+      if (viewer.hidden) return;
+      viewer.hidden = true;
+      document.body.classList.remove('has-image-viewer');
+      resetView();
+      image.removeAttribute('src');
+      if (session.url) {
+        URL.revokeObjectURL(session.url);
+        session.url = null;
+      }
+      session.pointers = {};
+      session.dragStart = null;
+      session.pinchStart = null;
+      session.listeners.forEach(function (pair) {
+        document.removeEventListener(pair[0], pair[1]);
+      });
+      session.listeners = [];
+      var target = session.restoreFocus;
+      session.restoreFocus = null;
+      if (target && typeof target.focus === 'function') target.focus();
+      announce('已关闭大图');
+    }
+
+    zoomOut.addEventListener('click', function () {
+      zoomCenter(session.scale - 0.5);
+    });
+    zoomIn.addEventListener('click', function () {
+      zoomCenter(session.scale + 0.5);
+    });
+    zoomReset.addEventListener('click', resetView);
+    closeBtn.addEventListener('click', close);
+
+    // 点空白处关闭；点图片本身不关闭，否则放大后想拖图会误触。
+    viewer.addEventListener('click', function (event) {
+      if (event.target === viewer || event.target === stage) close();
+    });
+
+    // 双击在 1x 与 2x 之间切换——手机上最顺手的放大方式。
+    image.addEventListener('dblclick', function (event) {
+      event.preventDefault();
+      if (session.scale > 1) {
+        resetView();
+      } else {
+        zoomAt(2, anchorOf(event));
+      }
+    });
+
+    function anchorOf(event) {
+      if (typeof event.clientX !== 'number') return null;
+      return { x: event.clientX, y: event.clientY };
+    }
+
+    function pointerList() {
+      return Object.keys(session.pointers).map(function (id) {
+        return session.pointers[id];
+      });
+    }
+
+    function pinchState(points) {
+      return {
+        distance: Math.sqrt(
+          Math.pow(points[0].x - points[1].x, 2) +
+            Math.pow(points[0].y - points[1].y, 2)
+        ),
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2
+      };
+    }
+
+    image.addEventListener('pointerdown', function (event) {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      session.pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+      // 捕获指针：手指滑出图片边界时仍能收到 move，拖到边缘不会突然断掉。
+      if (typeof image.setPointerCapture === 'function') {
+        try {
+          image.setPointerCapture(event.pointerId);
+        } catch (error) {
+          /* 某些浏览器对已释放的指针会抛错，忽略即可 */
+        }
+      }
+      var points = pointerList();
+      if (points.length === 2) {
+        var pinch = pinchState(points);
+        session.pinchStart = {
+          distance: pinch.distance,
+          x: pinch.x,
+          y: pinch.y,
+          scale: session.scale,
+          panX: session.panX,
+          panY: session.panY
+        };
+        session.dragStart = null;
+        image.classList.remove('is-dragging');
+      } else if (points.length === 1 && session.scale > 1) {
+        session.dragStart = {
+          x: event.clientX,
+          y: event.clientY,
+          panX: session.panX,
+          panY: session.panY
+        };
+        image.classList.add('is-dragging');
+      }
+    });
+
+    image.addEventListener('pointermove', function (event) {
+      if (!(event.pointerId in session.pointers)) return;
+      session.pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+      var points = pointerList();
+
+      if (points.length >= 2 && session.pinchStart) {
+        event.preventDefault();
+        var pinch = pinchState(points);
+        if (!session.pinchStart.distance) return;
+        // 以两指中点为准同时缩放和平移，捏合时图片才跟着手走。
+        session.panX = session.pinchStart.panX + (pinch.x - session.pinchStart.x);
+        session.panY = session.pinchStart.panY + (pinch.y - session.pinchStart.y);
+        zoomAt(
+          session.pinchStart.scale * (pinch.distance / session.pinchStart.distance),
+          { x: pinch.x, y: pinch.y }
+        );
+        return;
+      }
+
+      if (session.dragStart && session.scale > 1) {
+        event.preventDefault();
+        session.panX = session.dragStart.panX + (event.clientX - session.dragStart.x);
+        session.panY = session.dragStart.panY + (event.clientY - session.dragStart.y);
+        applyTransform();
+      }
+    });
+
+    function endPointer(event) {
+      delete session.pointers[event.pointerId];
+      if (typeof image.releasePointerCapture === 'function') {
+        try {
+          image.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          /* 未捕获过的指针释放会抛错，忽略即可 */
+        }
+      }
+      var remaining = Object.keys(session.pointers).length;
+      if (remaining < 2) session.pinchStart = null;
+      if (remaining === 0) {
+        session.dragStart = null;
+        image.classList.remove('is-dragging');
+      }
+    }
+
+    image.addEventListener('pointerup', endPointer);
+    image.addEventListener('pointercancel', endPointer);
+    image.addEventListener('pointerleave', function (event) {
+      // 鼠标移出时左键可能仍按着；只在没有按键时收尾，避免拖动被中断。
+      if (event.pointerType === 'mouse' && event.buttons === 0) endPointer(event);
+    });
+
+    function onKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === '+' || event.key === '=') {
+        zoomCenter(session.scale + 0.5);
+      } else if (event.key === '-') {
+        zoomCenter(session.scale - 0.5);
+      } else if (event.key === '0') {
+        resetView();
+      } else if (event.key === 'Tab') {
+        // 焦点陷阱：全屏遮罩打开时，Tab 不应跑到背后的页面上。
+        keepFocusInside(event);
+      }
+    }
+
+    function keepFocusInside(event) {
+      // disabled 的按钮拿不到焦点，必须排除，否则当前位置算不出来，
+      // Tab 会原地不动（缩小按钮在 1x 时正是 disabled）。
+      var focusables = [zoomOut, zoomReset, zoomIn, closeBtn].filter(function (button) {
+        return !button.disabled;
+      });
+      var index = focusables.indexOf(document.activeElement);
+      if (index === -1) {
+        // 焦点跑到遮罩外面（或位于不可聚焦元素）时，拉回第一个按钮。
+        event.preventDefault();
+        if (focusables.length) focusables[0].focus();
+        return;
+      }
+      event.preventDefault();
+      var step = event.shiftKey ? -1 : 1;
+      var next = (index + step + focusables.length) % focusables.length;
+      focusables[next].focus();
+    }
+
+    function onResize() {
+      resetView();
+    }
+
+    session.open = function (file, name, trigger) {
+      if (!file) return;
+      resetView();
+      session.pointers = {};
+      session.dragStart = null;
+      session.pinchStart = null;
+      if (session.url) URL.revokeObjectURL(session.url);
+      session.url = URL.createObjectURL(file);
+      image.src = session.url;
+      image.alt = name || '鱼获照片大图';
+      viewer.hidden = false;
+      document.body.classList.add('has-image-viewer');
+      // 记住是哪个缩略图打开的，关闭后焦点回到它，键盘用户不会丢失位置。
+      session.restoreFocus = trigger || document.activeElement;
+      closeBtn.focus();
+      announce('已打开照片大图，按 Esc 或点关闭退出');
+      // 只在第一次打开时挂监听：重复打开不能再挂一遍，否则一次按键会
+      // 触发多次（close 会被调用两次，焦点回跳就会乱）。
+      if (!session.listeners.length) {
+        session.listeners.push(['keydown', onKeydown]);
+        session.listeners.push(['resize', onResize]);
+        document.addEventListener('keydown', onKeydown);
+        window.addEventListener('resize', onResize);
+      }
+    };
+
+    session.close = close;
+    imageViewerSession = session;
+    return session;
+  }
+
   function makeSessionId() {
     if (window.crypto && typeof window.crypto.randomUUID === 'function') {
       return 'web-' + window.crypto.randomUUID();
@@ -1428,13 +1784,28 @@
       URL.revokeObjectURL(objectUrl);
     }
 
-    image.alt = '待识别的鱼获照片';
-    // 图片解码完成后立即释放 blob URL，避免长时间占用内存。
+    // 图片在按钮内部，语义由按钮的 aria-label 承担；alt 置空避免读屏
+    // 把"缩略图 + 查看大图"念两遍。
+    image.alt = '';
+    // 缩略图加载完就释放 blob 地址（省内存），所以查看大图时不能复用
+    // 这个地址——viewer.open 会按同一个 File 现造一个新地址。
     image.addEventListener('load', release);
     image.addEventListener('error', release);
     image.src = objectUrl;
-    preview.append(image);
+
+    // 缩略图即按钮：原生 button 才能在手机上拿到点击与键盘焦点，
+    // 也让读屏知道"这里可以点开"。图片只 append 一次，进 button 而不是进
+    // .msg-image——同一个节点 append 两次会被移动，留下一个空容器。
+    var openButton = el('button', 'msg-image-open');
+    openButton.type = 'button';
+    openButton.setAttribute('aria-label', '查看照片大图');
+    openButton.append(image);
+    preview.append(openButton);
     bubble.append(preview);
+    openButton.addEventListener('click', function () {
+      buildImageViewer().open(file, '鱼获照片大图', openButton);
+    });
+
     var label = el('span', 'msg-image-text', '识别这张图片');
     bubble.append(label);
     if (note) bubble.append(el('span', 'msg-image-note', note));

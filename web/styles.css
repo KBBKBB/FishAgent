@@ -1521,6 +1521,23 @@ h3 {
   line-height: 0;
 }
 
+/* 缩略图本身就是"查看大图"的按钮。border/padding 归零，让它看起来仍是
+   一张图，同时保留 button 的键盘焦点与触摸语义。 */
+.msg-image-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.msg-image-open:focus-visible {
+  outline: 3px solid rgba(14, 107, 82, 0.4);
+  outline-offset: 2px;
+}
+
 .msg-thumb {
   display: block;
   width: 168px;
@@ -1901,6 +1918,119 @@ h3 {
   .identify-species {
     font-size: 14.5px;
   }
+}
+
+/* --- 图片大图查看 ------------------------------------------------------ */
+
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 20, 16, 0.94);
+  /* 遮罩打开时不允许背景滚动，否则手机上放大后的拖动会和页面滚动打架。 */
+  overscroll-behavior: contain;
+}
+
+.image-viewer[hidden] {
+  display: none;
+}
+
+body.has-image-viewer {
+  overflow: hidden;
+}
+
+.image-viewer-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 12px;
+  transform-origin: center center;
+  will-change: transform;
+  /* 缩放后内容会溢出自己的盒子：必须裁剪，否则放大的图片会盖住工具栏，
+     用户点不到「关闭」。overflow 同时让拖动只在可视区内发生。 */
+  overflow: hidden;
+}
+
+.image-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  cursor: zoom-in;
+  /* 拖动时不要触发浏览器的原生图片拖拽，也不要选中。 */
+  -webkit-user-drag: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.image-viewer-img.is-zoomed {
+  cursor: grab;
+}
+
+.image-viewer-img.is-dragging {
+  cursor: grabbing;
+}
+
+.image-viewer-toolbar {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  /* 工具栏始终压在缩放后的图片之上，并自带不透明底，避免图片透上来。 */
+  background: rgba(8, 20, 16, 0.94);
+}
+
+.image-viewer-btn {
+  min-width: 56px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4faf6;
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.image-viewer-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.image-viewer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.image-viewer-close {
+  margin-left: 6px;
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+
+.image-viewer-close:hover {
+  background: #fff;
+}
+
+.image-viewer-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

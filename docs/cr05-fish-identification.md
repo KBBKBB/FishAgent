@@ -170,6 +170,12 @@ System prompt 要求模型输出：
   - 未收录鱼种（`in_catalog=false`）追加提示「该鱼种未在我们的常见列表中，信息仅供参考」
   - 未识别时显示服务端 `message`
 - 前端必须在 `URL.revokeObjectURL` 释放预览，不得把图片转 base64 存进 `state`。
+- **缩略图可点开大图**：对话里的缩略图只有 168px，看不出鱼的特征。缩略图是原生 `<button>`（`.msg-image-open`），点击后打开全屏查看器（`.image-viewer`）：
+  - 缩放 1×–4×，双击在 1×/2× 间切换，双指捏合按两指中点缩放，放大后单指拖动查看局部；`1:1` 复位。
+  - 关闭方式：`Esc`、工具栏「关闭」、点遮罩空白处。关闭后焦点回到那个缩略图；打开时焦点陷在工具栏内，`Tab` 只在可用按钮间循环（`disabled` 的「缩小」必须排除，否则焦点算不出来会卡住）。
+  - 查看器**不缓存图片地址**：缩略图在 `load` 后即 `revokeObjectURL`，所以打开时按同一个 `File` 现造地址，关闭时立即再释放。图片始终只在内存中，不落盘、不进 `localStorage`，与 §8 一致。
+  - 查看器 DOM 懒创建、单例：重复打开不能重复挂 `keydown`/`resize`，否则一次 `Esc` 会触发多次关闭、焦点回跳错乱。
+  - `.image-viewer-stage` 必须 `overflow: hidden` 且工具栏要压在其上：缩放后的内容会溢出自身盒子，否则大图会盖住「关闭」按钮，用户点不到。
 - 错误映射：服务端已经把每种失败写成具体文案，前端**照实透传 `detail.message`**，不再自己拼一句概括。413 → 按 `code` 区分——`IMAGE_TOO_LARGE` 透传（含尺寸与建议），否则「图片过大，请压缩后重试」；415 → 透传 `message`（`IMAGE_EMPTY` / `IMAGE_CORRUPT` / `UNSUPPORTED_MEDIA_TYPE` 三套文案各不相同，前端覆盖会把它们抹平）；429 → 沿用现有 `rateLimitMessage`；503 → 透传 `message`（`PROVIDER_NOT_CONFIGURED` 与 `VISION_UNAVAILABLE` 含义完全不同）。前端自己的 `AbortController` 超时（`code="TIMEOUT"`）单独提示「等待超时，服务可能仍在处理」，不能算作服务端错误。
 - 本地预检：`file.type` 为空串时**不要**在前端拦截（iOS 从「文件」App 选取的 HEIC 会出现这种情况），交给服务端按真实解码判断。
 - **识别期间不得禁用上传/拍照入口（2026-10-28 实故障）**：原实现把两个按钮在 `identifyBusy` 时设成 `disabled`，而界面上又没有别的取消入口，用户选错照片后**回不到选择界面重选**，只能干等——手机慢网下最长 60 秒。现在：

@@ -34,7 +34,13 @@ try:  # pragma: no cover - exercised by the HEIC tests when the extra is present
 except ImportError:  # pragma: no cover - the dependency is declared, not optional
     _HEIF_AVAILABLE = False
 
-ACCEPTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "HEIF", "AVIF"})
+# ``MPO`` (Multi Picture Object) is what iPhone and Samsung call a JPEG that
+# carries extra frames — an HDR gain map, portrait depth data, a Live Photo
+# still. Pillow reports the format as "MPO" even though ``MpoImageFile``
+# subclasses ``JpegImageFile`` and decodes through the identical path, so
+# leaving it out rejected perfectly ordinary iPhone photos as an "unsupported
+# format". Only the first frame is ever used.
+ACCEPTED_FORMATS = frozenset({"JPEG", "MPO", "PNG", "WEBP", "GIF", "HEIF", "AVIF"})
 
 READ_CHUNK_BYTES = 64 * 1024
 _MB = 1_000_000

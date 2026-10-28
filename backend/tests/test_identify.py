@@ -245,6 +245,71 @@ def test_decode_rejects_unlisted_formats(fmt):
     assert excinfo.value.code == "UNSUPPORTED_MEDIA_TYPE"
 
 
+# --- MPO: what an iPhone actually sends for an HDR / portrait photo --------
+
+
+def _mpo_bytes(size: tuple[int, int] = (400, 300), exif: bool = False) -> bytes:
+    main = Image.new("RGB", size, (30, 90, 140))
+    extra = Image.new("RGB", size, (200, 200, 200))
+    kwargs = {}
+    if exif:
+        meta = main.getexif()
+        meta[271] = "iPhoneSecret"
+        meta[34853] = {1: "N", 2: (31.0, 12.0, 0.0), 3: "E", 4: (121.0, 28.0, 0.0)}
+        kwargs["exif"] = meta
+    buffer = io.BytesIO()
+    main.save(buffer, format="MPO", save_all=True, append_images=[extra], **kwargs)
+    main.close()
+    extra.close()
+    return buffer.getvalue()
+
+
+def test_decode_accepts_mpo():
+    """Regression: iPhone HDR/portrait photos arrive as MPO and were rejected.
+
+    ``MpoImageFile`` subclasses ``JpegImageFile`` — the bytes are a JPEG with
+    extra frames appended — but Pillow reports ``format == "MPO"``, so a
+    whitelist of JPEG/PNG/WEBP/GIF/HEIF/AVIF rejected the phone's own default
+    output as an unsupported format.
+    """
+    source = _mpo_bytes()
+    assert Image.open(io.BytesIO(source)).format == "MPO", "guard: premise"
+
+    jpeg, media_type = normalize(source, max_side=1280)
+    assert media_type == "image/jpeg"
+    result = Image.open(io.BytesIO(jpeg))
+    assert result.format == "JPEG", "output must be a plain single-frame JPEG"
+    assert result.size == (400, 300)
+    result.close()
+
+
+def test_mpo_extra_frames_are_discarded():
+    """Only the first frame is sent; the depth/gain-map frames must not leak."""
+    jpeg, _ = normalize(_mpo_bytes(), max_side=1280)
+    result = Image.open(io.BytesIO(jpeg))
+    assert getattr(result, "n_frames", 1) == 1
+    result.close()
+
+
+def test_mpo_strips_exif():
+    """The GPS promise must hold for the format iPhones actually produce."""
+    source = _mpo_bytes(exif=True)
+    assert b"iPhoneSecret" in source, "guard: the source really has EXIF"
+    jpeg, _ = normalize(source, max_side=1280)
+    assert b"iPhoneSecret" not in jpeg
+    result = Image.open(io.BytesIO(jpeg))
+    assert dict(result.getexif()) == {}
+    result.close()
+
+
+def test_identify_endpoint_accepts_mpo_upload(client):
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("IMG_0002.JPG", _mpo_bytes(), "image/jpeg")},
+    )
+    assert response.status_code == 200, response.text
+
+
 # --- HEIC / AVIF: the iPhone default ---------------------------------------
 
 

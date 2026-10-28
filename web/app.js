@@ -58,7 +58,8 @@
     speciesByKey: {},
     speciesPending: {},
     speciesError: {},
-    identifyBusy: false
+    identifyBusy: false,
+    identifyRun: null
   };
 
   function $(id) {
@@ -406,24 +407,47 @@
         if (name.toLowerCase() === 'content-type') delete init.headers[name];
       });
     }
+    // 调用方可以传自己的 signal（例如用户取消识别）。这里把它和超时用的
+    // controller 合并：谁先触发都能中止请求，但要能分辨是哪一种——超时和
+    // 用户取消对用户意味着完全不同的事，不能都报成"超时"。
+    var external = opts.signal || init.signal || null;
     var controller = null;
     var timer = null;
-    if (opts.timeoutMs > 0 && typeof AbortController === 'function') {
+    var timedOut = false;
+    if ((external || opts.timeoutMs > 0) && typeof AbortController === 'function') {
       controller = new AbortController();
       init.signal = controller.signal;
-      timer = setTimeout(function () {
-        controller.abort();
-      }, opts.timeoutMs);
+      if (external) {
+        if (external.aborted) {
+          controller.abort();
+        } else if (typeof external.addEventListener === 'function') {
+          external.addEventListener('abort', function () {
+            controller.abort();
+          });
+        }
+      }
+      if (opts.timeoutMs > 0) {
+        timer = setTimeout(function () {
+          timedOut = true;
+          controller.abort();
+        }, opts.timeoutMs);
+      }
     }
     var response = null;
     try {
       response = await fetch(path, init);
     } catch (error) {
       if (controller && controller.signal.aborted) {
-        var timeoutError = new Error('请求超时，请稍后重试。');
-        timeoutError.status = 0;
-        timeoutError.code = 'TIMEOUT';
-        throw timeoutError;
+        if (timedOut) {
+          var timeoutError = new Error('请求超时，请稍后重试。');
+          timeoutError.status = 0;
+          timeoutError.code = 'TIMEOUT';
+          throw timeoutError;
+        }
+        var cancelError = new Error('已取消');
+        cancelError.status = 0;
+        cancelError.code = 'CANCELLED';
+        throw cancelError;
       }
       throw error;
     } finally {
@@ -1335,12 +1359,15 @@
   }
 
   function updateIdentifyControls() {
-    var busy = state.chatBusy || state.identifyBusy;
+    // 识别进行中**不**禁用入口。选完一张照片后发现选错了、想重选，是常事；
+    // 把按钮 disabled 掉，用户就只能干等（手机慢网下最长 60 秒）才能再点，
+    // 界面上又没有别的取消入口——这正是"选完照片后回不去选择界面"的原因。
+    // 重新选一张照片本身就是取消上一张，见 cancelIdentifyRun。
     ['identify-upload-btn', 'identify-camera-btn'].forEach(function (id) {
       var button = $(id);
       if (!button) return;
-      button.disabled = busy;
-      button.setAttribute('aria-busy', busy ? 'true' : 'false');
+      button.disabled = state.chatBusy;
+      button.setAttribute('aria-busy', state.identifyBusy ? 'true' : 'false');
       button.classList.toggle('is-loading', state.identifyBusy);
     });
   }
@@ -1386,7 +1413,7 @@
     return '图片识别失败，请稍后重试。';
   }
 
-  function appendUserImageMessage(file, note) {
+  function appendUserImageMessage(file, note, onCancel) {
     var list = $('chat-messages');
     var wrapper = el('div', 'msg msg-user msg-user-image');
     var bubble = el('div', 'msg-bubble');
@@ -1408,12 +1435,34 @@
     image.src = objectUrl;
     preview.append(image);
     bubble.append(preview);
-    bubble.append(el('span', 'msg-image-text', '识别这张图片'));
+    var label = el('span', 'msg-image-text', '识别这张图片');
+    bubble.append(label);
     if (note) bubble.append(el('span', 'msg-image-note', note));
+    // 识别期间给一个就地取消入口：手机上想换一张，不必去找工具栏按钮。
+    var cancel = null;
+    if (typeof onCancel === 'function') {
+      cancel = el('button', 'msg-image-cancel', '取消，重新选择');
+      cancel.type = 'button';
+      cancel.addEventListener('click', function () {
+        onCancel();
+      });
+      bubble.append(cancel);
+    }
     wrapper.append(bubble);
     list.append(wrapper);
     list.scrollTop = list.scrollHeight;
-    return { element: wrapper, release: release };
+    return {
+      element: wrapper,
+      release: release,
+      cancel: cancel,
+      // 请求结束后取消已经没有意义，收起来免得误导。
+      finish: function () {
+        if (cancel && cancel.parentNode) cancel.remove();
+      },
+      setLabel: function (text) {
+        label.textContent = text;
+      }
+    };
   }
 
   function identifyField(label, value) {
@@ -1523,8 +1572,19 @@
     return wrapper;
   }
 
+  // 取消当前识别：中止在途请求，并把已经发出的气泡标成"已取消"。
+  // 用户重新选一张照片时也会走这里，所以"重选"天然就是"取消"。
+  function cancelIdentifyRun() {
+    var run = state.identifyRun;
+    if (!run || run.settled) return;
+    run.cancelled = true;
+    if (typeof run.controller === 'object' && run.controller) {
+      run.controller.abort();
+    }
+  }
+
   async function handleIdentifyFile(file) {
-    if (!file || state.identifyBusy || state.chatBusy) return;
+    if (!file || state.chatBusy) return;
     // 部分 iOS 场景下 file.type 为空串（尤其从「文件」App 选取的 HEIC）。
     // 空类型交给服务端按真实解码判断，不要在前端就把合法图片挡掉。
     var mime = typeof file.type === 'string' ? file.type : '';
@@ -1541,12 +1601,21 @@
       return;
     }
 
+    // 上一张还在识别中：先取消它，再用新选的这张开始。
+    cancelIdentifyRun();
+
     var input = $('chat-input');
     var note = String(input.value || '').trim().slice(0, IDENTIFY_MAX_NOTE);
 
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var run = { controller: controller, cancelled: false, settled: false };
+    state.identifyRun = run;
+
     state.identifyBusy = true;
     updateChatControls();
-    var preview = appendUserImageMessage(file, note);
+    var preview = appendUserImageMessage(file, note, function () {
+      cancelIdentifyRun();
+    });
     var typing = appendTyping();
     if (note) input.value = '';
 
@@ -1556,20 +1625,36 @@
       if (note) form.append('note', note);
       var data = await requestJSON(
         '/api/agent/identify-fish',
-        { method: 'POST', body: form },
-        { timeoutMs: IDENTIFY_TIMEOUT_MS }
+        { method: 'POST', body: form, signal: controller ? controller.signal : undefined },
+        { timeoutMs: IDENTIFY_TIMEOUT_MS, signal: controller ? controller.signal : undefined }
       );
+      if (run.cancelled) return;
       typing.remove();
       renderIdentifyResult(data);
     } catch (error) {
+      if (run.cancelled) {
+        // 用户主动取消不是错误，不要把中止报成"识别失败"。
+        typing.remove();
+        preview.setLabel('已取消，可重新选择照片');
+        // 若用户已经选了新的一张，状态栏归新请求管，别再覆盖它的提示。
+        if (state.identifyRun === run) setStatus('已取消这次识别。');
+        return;
+      }
       typing.remove();
       var errorText = identifyErrorMessage(error);
       appendIdentifyError(errorText);
       setStatus('图片识别失败：' + errorText, 'error');
     } finally {
+      run.settled = true;
+      preview.finish();
       preview.release();
-      state.identifyBusy = false;
-      updateChatControls();
+      // 只有仍是"当前这次"时才能收尾全局状态：被新照片取代的那次运行
+      // 结束得比新运行晚，若无条件清除会把新运行的 busy 状态误清掉。
+      if (state.identifyRun === run) {
+        state.identifyRun = null;
+        state.identifyBusy = false;
+        updateChatControls();
+      }
     }
   }
 

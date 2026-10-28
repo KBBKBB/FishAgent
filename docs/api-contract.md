@@ -11,7 +11,7 @@
 > v1.7（2026-10-26）：Phase 2 三阶段并发化 + 加深截止时间；页预算 6→12、LLM 调用 4→2；LLM 抽取计入每日配额并按 4.6 降级；未注册 API 路径的违规方法改为 404。
 > v1.8（2026-10-27）：新增 `POST /api/agent/identify-fish`（图片识别鱼种，CR-05）；见 4.7 与 `cr05-fish-identification.md`。
 > v1.9（2026-10-27）：`/api/spots/recommend` 增加 180s 结果缓存（按四舍五入坐标/半径/limit/物种/offset 分键）；单候选去程与回程合并为一次调用（真实高德 provider 忽略 `direction`），评估期调用数减半；冷启动 14.8s → 8.1s，热命中 <20ms。
-> v2.0（2026-10-28）：4.7 错误码细分——新增 415 `IMAGE_EMPTY` / `IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`；`VisionUnavailable` 按失败原因（超时 / 上游错误 / 空回答 / 无法解析）给出不同文案，不再把服务中断说成「图片无法识别」或「不支持的格式」。
+> v2.0（2026-10-28）：4.7 错误码细分——新增 415 `IMAGE_EMPTY` / `IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`；`VisionUnavailable` 按失败原因（超时 / 上游错误 / 空回答 / 无法解析）给出不同文案，不再把服务中断说成「图片无法识别」或「不支持的格式」。同时接受 `MPO`（iPhone HDR / 人像照片的 JPEG 变体），此前会被误判为不支持的格式。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -374,6 +374,7 @@ fixtures/                         # 小产：演示场景
 
 - 请求：`multipart/form-data`，`image`（file，必填）+ `note`（text，可选，≤100 字符）。图片大小上限 `FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES`（默认 8 MiB）。
 - 图片处理：流式读取并截断、Pillow 真实解码（不信任 `Content-Type`/扩展名）、最长边缩放至 `FISHAGENT_IDENTIFY_MAX_SIDE`（默认 1280）、重编码 JPEG quality=85、**丢弃 EXIF（含手机 GPS）**。全程在内存中，不落盘、不缓存、不记日志。
+- 接受格式：JPEG / **MPO** / PNG / WEBP / GIF / HEIF / AVIF。`MPO` 是 iPhone HDR、人像、实况照片的 JPEG 变体（Pillow 报 `format="MPO"`，但解码路径与 JPEG 相同，只取第一帧）；漏掉它会把 iPhone 默认拍出的照片判成不支持的格式。
 - 模型：`LLM_VISION_MODEL`，留空回落 `LLM_MODEL`。所配模型必须接受图像输入。`content` 为空一律视为失败，不得把 `reasoning_content` 当答案。
 - `identified=false` 时 `species` 与 `raw_species` 必须为 `null`——模型会把「无法识别」等占位词填进 `species`，不得透传给前端。
 - 文本字段命中 `violates_guardrails`（承诺渔获）时，整体降级为未识别，不得输出半清洗的结果。
@@ -442,4 +443,5 @@ cd backend
 | v1.7 | 2026-10-26 | Phase 2 串行改并发（检索/抓页/加深三阶段）、每请求页预算 6→12、LLM 调用 4→2、加深阶段截止时间与单次调用限时；LLM 抽取计入每日配额并按 4.6 降级；明确未知 API 路径 404/405 语义 | 5 钓位批量冷启动 4.1s 撞 4s 超时导致整批降级；未注册路径的 POST 误报英文 405 |
 | v1.8 | 2026-10-27 | 新增图片识别鱼种端点（multipart 上传、图片内存内规范化与 EXIF 丢弃、视觉模型抽取、占位词与承诺性表述防护、配额返 429） | CR-05：Agent 板块支持拍照/上传识别鱼种 |
 | v1.9 | 2026-10-27 | `/api/spots/recommend` 结果缓存 180s + 去/回程调用合并；冷启动 14.8s→8.1s，热命中 <20ms | 手机端「附近钓位」需等 14s 才出结果，被用户当成服务不可用 |
-| v2.0 | 2026-10-28 | 识别端点错误码细分：415 `IMAGE_EMPTY`/`IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`（按超时/上游错误/空回答/无法解析分文案）；前端透传 `detail.message` 不再自行概括 | 识别失败一律回「不支持的图片格式，请换一张」，把服务超时与文件损坏都说成格式问题，误导用户 |
+| v2.0 | 2026-10-28 | 识别端点错误码细分：415 `IMAGE_EMPTY`/`IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`（按超时/上游错误/空回答/无法解析分文案）；前端透传 `detail.message` 不再自行概括；接受 `MPO` | 识别失败一律回「不支持的图片格式，请换一张」，把服务超时与文件损坏都说成格式问题，误导用户 |
+| v2.1 | 2026-10-28 | 接受 `MPO` 格式（iPhone HDR/人像照片）；识别期间不再禁用上传/拍照入口，重新选图即取消上一张，预览气泡提供取消按钮 | iPhone 默认拍摄的照片被 415 判成「不支持的格式」；选错照片后按钮被禁用且无取消入口，用户回不到选择界面 |

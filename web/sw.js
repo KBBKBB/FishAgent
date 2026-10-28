@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump CACHE_VERSION whenever a precached shell asset changes.
-var CACHE_VERSION = 'fishagent-v10';
+var CACHE_VERSION = 'fishagent-v11';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var PRECACHE_URLS = [
   '/',

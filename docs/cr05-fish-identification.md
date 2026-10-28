@@ -105,7 +105,8 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 
 1. 读入上限 `max_upload_bytes`，超限直接 413（读取时即截断，不整体载入内存）。
 2. 用 Pillow 实际解码校验，不信任 `Content-Type` 与扩展名：
-   - 仅接受 JPEG / PNG / WEBP / GIF / HEIF / AVIF。其中 HEIF（即 iPhone 的 HEIC）与 AVIF 由 `pillow-heif` 提供解码能力——Safari 在上传时不保证转码，从「文件」App 选取的照片可能原样送达，因此必须由服务端直接支持。
+   - 仅接受 JPEG / MPO / PNG / WEBP / GIF / HEIF / AVIF。其中 HEIF（即 iPhone 的 HEIC）与 AVIF 由 `pillow-heif` 提供解码能力——Safari 在上传时不保证转码，从「文件」App 选取的照片可能原样送达，因此必须由服务端直接支持。
+   - **`MPO` 必须接受（2026-10-28 实故障）**：iPhone / 三星开启 HDR、人像或实况照片后，输出的仍是 JPEG 字节，但会在后面追加副图（增益图、景深图、实况静帧），Pillow 因此把 `image.format` 报成 `MPO`。`MpoImageFile` 直接继承 `JpegImageFile`，解码路径完全一致，但白名单里只有 `JPEG` 时，iPhone 默认拍出的照片会被判成「不支持的格式」并返回 415。只取第一帧；副图不会进入后续处理。
    - 上限取自 `FISHAGENT_IDENTIFY_MAX_IMAGE_PIXELS`（默认 8000 万像素）；Pillow 的进程级 `Image.MAX_IMAGE_PIXELS` 在**应用启动时**由 `sync_pillow_limits` 同步一次，不在请求中修改（并发请求会竞争全局状态）。超限返回 **413 `IMAGE_TOO_LARGE`（不是 415）**，`message` 带具体尺寸
    - **注意**：Pillow 在超过上限 2 倍时才抛 `DecompressionBombError`，1–2 倍之间只发 `DecompressionBombWarning`。因此必须把 warning 转异常（`warnings.simplefilter("error", Image.DecompressionBombWarning)` 或显式比对 `width*height`），不能只依赖硬错误。
    - **上限教训（2026-10-27 实故障）**：上限原为 4000 万像素，导致 iPhone Pro 的 48MP 照片（8064×6048 = 4880 万像素）被直接拒掉，全景照片（10800×4000）同样。iPhone 各档位实测：12MP / 24MP / 48MP 分别是 1220 万 / 2447 万 / 4877 万像素。现调到 8000 万像素，覆盖到 48MP 与全景仍有余量。
@@ -171,7 +172,14 @@ System prompt 要求模型输出：
 - 前端必须在 `URL.revokeObjectURL` 释放预览，不得把图片转 base64 存进 `state`。
 - 错误映射：服务端已经把每种失败写成具体文案，前端**照实透传 `detail.message`**，不再自己拼一句概括。413 → 按 `code` 区分——`IMAGE_TOO_LARGE` 透传（含尺寸与建议），否则「图片过大，请压缩后重试」；415 → 透传 `message`（`IMAGE_EMPTY` / `IMAGE_CORRUPT` / `UNSUPPORTED_MEDIA_TYPE` 三套文案各不相同，前端覆盖会把它们抹平）；429 → 沿用现有 `rateLimitMessage`；503 → 透传 `message`（`PROVIDER_NOT_CONFIGURED` 与 `VISION_UNAVAILABLE` 含义完全不同）。前端自己的 `AbortController` 超时（`code="TIMEOUT"`）单独提示「等待超时，服务可能仍在处理」，不能算作服务端错误。
 - 本地预检：`file.type` 为空串时**不要**在前端拦截（iOS 从「文件」App 选取的 HEIC 会出现这种情况），交给服务端按真实解码判断。
-- `sw.js` `CACHE_VERSION` 随 `app.js` 的每次改动递增（当前 `fishagent-v10`）：旧 Service Worker 会继续供旧 `app.js`，不改版本号用户的错误文案永远不更新。
+- **识别期间不得禁用上传/拍照入口（2026-10-28 实故障）**：原实现把两个按钮在 `identifyBusy` 时设成 `disabled`，而界面上又没有别的取消入口，用户选错照片后**回不到选择界面重选**，只能干等——手机慢网下最长 60 秒。现在：
+  - `disabled` 只跟随 `chatBusy`（聊天请求进行中），识别进行中按钮保持可点；
+  - 重新选一张照片本身就是取消上一张（`cancelIdentifyRun` 中止在途请求）；
+  - 预览气泡里有「取消，重新选择」按钮（`.msg-image-cancel`），取消后气泡文案变为「已取消，可重新选择照片」；
+  - `requestJSON` 合并调用方的 `signal` 与超时 controller，并区分 `code="CANCELLED"`（用户主动取消，不报错）与 `code="TIMEOUT"`（超时，如实提示）；
+  - 旧运行的 `finally` 只在它仍是 `state.identifyRun` 时才收尾全局状态，否则会把新运行的 busy 状态误清掉。
+- 主要格式以外的实际形态：iPhone 传上来的可能是 `MPO`（见 §3），前端不要按扩展名或 `file.type` 推断，`image/jpeg` 覆盖不到它。
+- `sw.js` `CACHE_VERSION` 随 `app.js` / `styles.css` 的每次改动递增（当前 `fishagent-v11`）：旧 Service Worker 会继续供旧资源，不改版本号用户的错误文案永远不更新。
 - 移动端 375px 下不得横向溢出。
 
 ## 7. 依赖

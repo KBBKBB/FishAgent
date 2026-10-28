@@ -1545,6 +1545,25 @@ h3 {
   opacity: 0.9;
 }
 
+/* 就地取消入口：手机上想换一张，不必回头去找工具栏按钮。
+   触摸目标至少 32px，避免误触。 */
+.msg-image-cancel {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid #cfe3d7;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--brand-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.msg-image-cancel:hover {
+  background: var(--brand-soft);
+}
+
 .msg-identify {
   max-width: 100%;
 }

@@ -1,8 +1,11 @@
 """OpenAI-compatible vision call that identifies the fish in one photo.
 
 The endpoint is untrusted input: it may time out, return prose instead of JSON,
-or answer with an empty ``content``. Every failure mode collapses to ``None``,
-which the API reports as "not identified" (HTTP 200) — never a 5xx.
+or answer with an empty ``content``. Failures are reported as a typed
+``VisionFailure`` so the API can tell the user what actually happened —
+"the service timed out" and "no fish in this photo" are different answers, and
+collapsing them onto "couldn't identify the fish" blames the user's photo for
+our own outage.
 
 Known trap: some reasoning-capable deployments put the whole answer in
 ``message.reasoning_content`` and leave ``message.content`` empty. That content
@@ -14,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib
 import json
 import logging
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -43,6 +48,32 @@ SYSTEM_PROMPT = (
 )
 
 _FENCED_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+class VisionFailure(str, Enum):
+    """Why an identification attempt produced no answer.
+
+    Each value maps to a different user-facing message, because "the model
+    timed out" and "there is no fish in the picture" call for different
+    actions and different blame.
+    """
+
+    TIMEOUT = "timeout"
+    UPSTREAM_ERROR = "upstream_error"
+    EMPTY_ANSWER = "empty_answer"
+    UNPARSABLE_ANSWER = "unparsable_answer"
+
+
+class VisionUnavailable(Exception):
+    """The call itself failed; no answer was obtained.
+
+    Deliberately an exception rather than a ``None`` return so it cannot be
+    confused with "the model looked and saw no fish".
+    """
+
+    def __init__(self, reason: VisionFailure) -> None:
+        super().__init__(reason.value)
+        self.reason = reason
 
 
 @dataclass
@@ -98,11 +129,17 @@ class VisionFishIdentifier:
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            # Timeouts, HTTP errors and connection failures all degrade to
-            # "not identified"; the route must never answer 5xx for this.
+        except Exception as exc:
+            if _is_timeout(exc):
+                logger.warning(
+                    "vision fish identification timed out after %.0fs",
+                    self._timeout_seconds,
+                )
+                raise VisionUnavailable(VisionFailure.TIMEOUT) from exc
+            # Connection errors, HTTP errors and auth failures: our fault, not
+            # the user's photo. The route answers 503, not "couldn't identify".
             logger.warning("vision fish identification call failed", exc_info=True)
-            return None
+            raise VisionUnavailable(VisionFailure.UPSTREAM_ERROR) from exc
 
         content = _content_of(response)
         if not content:
@@ -110,8 +147,43 @@ class VisionFishIdentifier:
             # message.reasoning_content: it is the model's scratchpad, not an
             # answer, and returning it would surface hallucinated species.
             logger.warning("vision fish identification returned empty content")
-            return None
-        return _parse_payload(content)
+            raise VisionUnavailable(VisionFailure.EMPTY_ANSWER)
+        result = _parse_payload(content)
+        if result is None:
+            logger.warning("vision fish identification returned an unparsable answer")
+            raise VisionUnavailable(VisionFailure.UNPARSABLE_ANSWER)
+        return result
+
+
+_TIMEOUT_EXCEPTION_NAMES = (("httpx", "TimeoutException"), ("openai", "APITimeoutError"))
+
+
+def _is_timeout(exc: BaseException, *, _depth: int = 0) -> bool:
+    """Whether this exception means "we waited too long", however it surfaced.
+
+    ``TimeoutError`` alone is not enough. ``asyncio.wait_for`` raises the
+    builtin on 3.11+, but the SDK's own ``APITimeoutError`` inherits from
+    ``openai.APIError``, and the ``httpx.ReadTimeout`` underneath inherits from
+    ``httpx.TimeoutException`` — neither is a ``TimeoutError``. Without this
+    the slower of the two timers would be reported as "service unavailable"
+    instead of "timed out", which is a different problem with a different fix.
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    for module_name, class_name in _TIMEOUT_EXCEPTION_NAMES:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:  # pragma: no cover - both are hard dependencies
+            continue
+        cls = getattr(module, class_name, None)
+        if isinstance(cls, type) and isinstance(exc, cls):
+            return True
+    # SDKs wrap the transport error, so the timeout often sits in the cause
+    # chain. Bounded depth: ``__cause__`` can form a cycle.
+    if _depth < 4 and isinstance(exc.__cause__, BaseException):
+        if _is_timeout(exc.__cause__, _depth=_depth + 1):
+            return True
+    return "timeout" in type(exc).__name__.lower()
 
 
 def _build_messages(

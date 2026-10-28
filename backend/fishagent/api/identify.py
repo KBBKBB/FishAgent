@@ -21,7 +21,12 @@ from fishagent.core.image_guard import prepare_image
 from fishagent.core.species import KNOWN_SPECIES, normalize_species
 from fishagent.errors import ApiError
 from fishagent.pilot import get_pilot_state
-from fishagent.providers.vision_fish import VisionFish, VisionFishIdentifier
+from fishagent.providers.vision_fish import (
+    VisionFailure,
+    VisionFish,
+    VisionFishIdentifier,
+    VisionUnavailable,
+)
 from fishagent.services.fish_activity import utc_timestamp
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,24 @@ MAX_BAIT_LENGTH = 20
 UNIDENTIFIED_MESSAGE = (
     "未能识别出鱼的种类，请换一张更清晰的照片（建议鱼体完整、光线充足）。"
 )
+
+# One message per failure mode. None of these may say "unsupported format" or
+# blame the photo: the upload was a valid image and the fault is ours.
+FAILURE_MESSAGES: dict[VisionFailure, str] = {
+    VisionFailure.TIMEOUT: (
+        "图片识别服务响应超时，未能完成判断。"
+        "这不是照片的问题，请稍后重试。"
+    ),
+    VisionFailure.UPSTREAM_ERROR: (
+        "图片识别服务暂时不可用，未能完成判断。请稍后重试。"
+    ),
+    VisionFailure.EMPTY_ANSWER: (
+        "图片识别服务没有返回有效结果，请稍后重试。"
+    ),
+    VisionFailure.UNPARSABLE_ANSWER: (
+        "图片识别服务返回的结果无法解析，请稍后重试。"
+    ),
+}
 
 # The model sometimes fills ``species`` with a placeholder even when it says
 # ``identified=false`` ("无法识别", "不确定", "未知", ...). Those must never reach
@@ -148,21 +171,28 @@ async def identify_fish(
         pilot_state.ledger.consume("llm")
 
     logger.info("vision fish identification: normalised_image_bytes=%d", len(jpeg_bytes))
-    result = await identifier.identify(
-        jpeg_bytes,
-        media_type=media_type,
-        note=trimmed_note,
-    )
-    if result is None:
-        # Distinguishes "the model call failed" (provider/timeout/empty content)
-        # from "the model answered but nothing was recognised" — different bugs.
-        logger.info("vision fish identification: model returned no usable answer")
-    else:
-        logger.info(
-            "vision fish identification: identified=%s confidence=%s",
-            result.identified,
-            result.confidence,
+    try:
+        result = await identifier.identify(
+            jpeg_bytes,
+            media_type=media_type,
+            note=trimmed_note,
         )
+    except VisionUnavailable as exc:
+        # The service failed, not the photo. Saying "couldn't identify the fish"
+        # here would blame the user's image for our own timeout and tell them to
+        # do something (retake it) that cannot possibly help.
+        logger.warning("vision fish identification unavailable: %s", exc.reason.value)
+        raise ApiError(
+            status_code=503,
+            code="VISION_UNAVAILABLE",
+            message=FAILURE_MESSAGES[exc.reason],
+        ) from exc
+
+    logger.info(
+        "vision fish identification: identified=%s confidence=%s",
+        result.identified,
+        result.confidence,
+    )
     return _to_response(result)
 
 

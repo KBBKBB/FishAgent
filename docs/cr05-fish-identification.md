@@ -82,12 +82,20 @@ Agent 板块新增「拍照/上传图片识别鱼种」。
 |---|---|---|
 | 413 | `PAYLOAD_TOO_LARGE` | 上传字节数超过上限 |
 | 413 | `IMAGE_TOO_LARGE` | 分辨率超过 8000 万像素（格式受支持，只是太大）；`message` 带具体尺寸 |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | 非图片 / 无法解码 / 不支持的格式 |
+| 415 | `IMAGE_EMPTY` | 上传内容为空（0 字节） |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | 不是可识别的图片（PDF、文本），或格式不在接受列表内 |
+| 415 | `IMAGE_CORRUPT` | 图片头可读但像素数据损坏 / 被截断 |
 | 422 | `VALIDATION_ERROR` | 缺 `image` 字段、`note` 超长 |
 | 429 | `QUOTA_EXCEEDED` | 每日 LLM 配额耗尽（带 `Retry-After`） |
 | 503 | `PROVIDER_NOT_CONFIGURED` | 真实模式未配置 `LLM_API_KEY` |
+| 503 | `VISION_UNAVAILABLE` | 视觉服务本身失败：超时 / 上游报错 / 空回答 / 回答无法解析 |
 
 错误体沿用统一结构 `{"detail": {"code", "message"}}`。
+
+**如实报告原则**：每一种失败都要说成它自己的样子，不能统一回一句「不支持的图片格式」。
+
+- 415 的三种来源必须分开：格式不支持 → 换格式；文件损坏 → 重新导出/重拍；内容为空 → 重新选择。用户按错方向排查，等于没给提示。
+- `VISION_UNAVAILABLE` 是**我们的问题，不是照片的问题**。超时的文案明确写「这不是照片的问题」，因为让用户重拍一张来解决服务端超时是无效建议。区分「模型看过了，照片里没有鱼」（200 + `identified=false`）和「模型根本没看到照片」（503）是这条契约的核心。
 
 **配额口径**：与聊天一致，按用户主动动作处理，配额耗尽返回 429（不像鱼种列表需要降级，因为这里没有可降级的部分结果）。
 
@@ -161,9 +169,9 @@ System prompt 要求模型输出：
   - 未收录鱼种（`in_catalog=false`）追加提示「该鱼种未在我们的常见列表中，信息仅供参考」
   - 未识别时显示服务端 `message`
 - 前端必须在 `URL.revokeObjectURL` 释放预览，不得把图片转 base64 存进 `state`。
-- 错误映射：413 → 按 `code` 区分——`IMAGE_TOO_LARGE` 直接透传服务端 `message`（含尺寸与建议），否则「图片过大，请压缩后重试」；415 → 「不支持的图片格式」；429 → 沿用现有 `rateLimitMessage`；503 → 「图片识别服务未配置」。
+- 错误映射：服务端已经把每种失败写成具体文案，前端**照实透传 `detail.message`**，不再自己拼一句概括。413 → 按 `code` 区分——`IMAGE_TOO_LARGE` 透传（含尺寸与建议），否则「图片过大，请压缩后重试」；415 → 透传 `message`（`IMAGE_EMPTY` / `IMAGE_CORRUPT` / `UNSUPPORTED_MEDIA_TYPE` 三套文案各不相同，前端覆盖会把它们抹平）；429 → 沿用现有 `rateLimitMessage`；503 → 透传 `message`（`PROVIDER_NOT_CONFIGURED` 与 `VISION_UNAVAILABLE` 含义完全不同）。前端自己的 `AbortController` 超时（`code="TIMEOUT"`）单独提示「等待超时，服务可能仍在处理」，不能算作服务端错误。
 - 本地预检：`file.type` 为空串时**不要**在前端拦截（iOS 从「文件」App 选取的 HEIC 会出现这种情况），交给服务端按真实解码判断。
-- `sw.js` `CACHE_VERSION` 升到 `fishagent-v8`。
+- `sw.js` `CACHE_VERSION` 随 `app.js` 的每次改动递增（当前 `fishagent-v10`）：旧 Service Worker 会继续供旧 `app.js`，不改版本号用户的错误文案永远不更新。
 - 移动端 375px 下不得横向溢出。
 
 ## 7. 依赖

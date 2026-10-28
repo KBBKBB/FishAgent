@@ -1354,6 +1354,10 @@
 
   function identifyErrorMessage(error) {
     var status = error ? Number(error.status) : 0;
+    // 前端自己的超时（AbortController）不是服务端错误，如实说是超时。
+    if (error && error.code === 'TIMEOUT') {
+      return '图片识别等待超时，服务可能仍在处理。请稍后重试，或换一张更小的照片。';
+    }
     if (status === 413) {
       // 413 有两个来源：上传字节数超限（PAYLOAD_TOO_LARGE）和分辨率超限
       // （IMAGE_TOO_LARGE）。后者服务端会带上具体尺寸和处置建议，直接透传。
@@ -1362,12 +1366,22 @@
       }
       return IDENTIFY_MAX_BYTES_TEXT;
     }
-    // Keep this in step with ACCEPTED_FORMATS in core/image_guard.py.
-    if (status === 415) return '不支持的图片格式，请换一张 JPG/PNG/WEBP/GIF/HEIC 图片';
+    // 415 有四种来源，处置方式各不相同：格式不支持（换格式）、文件损坏
+    // （重选/重拍）、内容为空（重选）、根本不是图片（选图片）。
+    // 服务端已经按 code 给出具体说明，这里照实透传，不要统一覆盖成
+    // "不支持的图片格式"——那会把"图片损坏"误导成"格式不对"。
+    if (status === 415) {
+      if (error && error.message) return String(error.message);
+      return '不支持的图片格式，请换一张 JPG/PNG/WEBP/GIF/HEIC 图片';
+    }
     if (status === 429) {
       return (error && error.message) || rateLimitMessage(error && error.data, error && error.retryAfter);
     }
-    if (status === 503) return '图片识别服务未配置，暂时无法识别';
+    // 503 既可能是"未配置"，也可能是模型超时/上游故障；后者服务端带了
+    // 具体原因，同样透传，不要一律说成"未配置"。
+    if (status === 503) {
+      return (error && error.message) || '图片识别服务暂时不可用，请稍后重试';
+    }
     if (error && error.message) return String(error.message);
     return '图片识别失败，请稍后重试。';
   }

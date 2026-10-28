@@ -11,6 +11,7 @@
 > v1.7（2026-10-26）：Phase 2 三阶段并发化 + 加深截止时间；页预算 6→12、LLM 调用 4→2；LLM 抽取计入每日配额并按 4.6 降级；未注册 API 路径的违规方法改为 404。
 > v1.8（2026-10-27）：新增 `POST /api/agent/identify-fish`（图片识别鱼种，CR-05）；见 4.7 与 `cr05-fish-identification.md`。
 > v1.9（2026-10-27）：`/api/spots/recommend` 增加 180s 结果缓存（按四舍五入坐标/半径/limit/物种/offset 分键）；单候选去程与回程合并为一次调用（真实高德 provider 忽略 `direction`），评估期调用数减半；冷启动 14.8s → 8.1s，热命中 <20ms。
+> v2.0（2026-10-28）：4.7 错误码细分——新增 415 `IMAGE_EMPTY` / `IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`；`VisionUnavailable` 按失败原因（超时 / 上游错误 / 空回答 / 无法解析）给出不同文案，不再把服务中断说成「图片无法识别」或「不支持的格式」。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -376,7 +377,8 @@ fixtures/                         # 小产：演示场景
 - 模型：`LLM_VISION_MODEL`，留空回落 `LLM_MODEL`。所配模型必须接受图像输入。`content` 为空一律视为失败，不得把 `reasoning_content` 当答案。
 - `identified=false` 时 `species` 与 `raw_species` 必须为 `null`——模型会把「无法识别」等占位词填进 `species`，不得透传给前端。
 - 文本字段命中 `violates_guardrails`（承诺渔获）时，整体降级为未识别，不得输出半清洗的结果。
-- 错误：413 `PAYLOAD_TOO_LARGE` / 415 `UNSUPPORTED_MEDIA_TYPE` / 422 `VALIDATION_ERROR` / 429 `QUOTA_EXCEEDED` / 503 `PROVIDER_NOT_CONFIGURED`，均用统一错误体。
+- 错误：413 `PAYLOAD_TOO_LARGE` / `IMAGE_TOO_LARGE`、415 `IMAGE_EMPTY` / `UNSUPPORTED_MEDIA_TYPE` / `IMAGE_CORRUPT`、422 `VALIDATION_ERROR`、429 `QUOTA_EXCEEDED`、503 `PROVIDER_NOT_CONFIGURED` / `VISION_UNAVAILABLE`，均用统一错误体。
+- **如实报告**：视觉调用本身失败（超时 / 上游报错 / 空回答 / 回答无法解析）返回 503 `VISION_UNAVAILABLE`，文案按失败原因区分，且明确不归咎于照片；`identified=false`（200）只表示「模型看过了，照片里没有鱼」。两者**不可合并**。415 的三种来源（空文件 / 不是图片 / 文件损坏）各有独立 `code` 与文案，前端必须透传，不得统一改写成「不支持的图片格式」。
 - **配额**：真实模式每次视觉调用在 `api/identify.py` 内 `ledger.consume("llm")` 扣 1 单位；耗尽抛 `UpstreamQuotaExceeded` 由已有 handler 转 429 + `Retry-After`。与 4.6 不同：本端点无部分结果可降级，故返回 429 而非 200。
 
 ## 5. Mock 数据要求
@@ -440,3 +442,4 @@ cd backend
 | v1.7 | 2026-10-26 | Phase 2 串行改并发（检索/抓页/加深三阶段）、每请求页预算 6→12、LLM 调用 4→2、加深阶段截止时间与单次调用限时；LLM 抽取计入每日配额并按 4.6 降级；明确未知 API 路径 404/405 语义 | 5 钓位批量冷启动 4.1s 撞 4s 超时导致整批降级；未注册路径的 POST 误报英文 405 |
 | v1.8 | 2026-10-27 | 新增图片识别鱼种端点（multipart 上传、图片内存内规范化与 EXIF 丢弃、视觉模型抽取、占位词与承诺性表述防护、配额返 429） | CR-05：Agent 板块支持拍照/上传识别鱼种 |
 | v1.9 | 2026-10-27 | `/api/spots/recommend` 结果缓存 180s + 去/回程调用合并；冷启动 14.8s→8.1s，热命中 <20ms | 手机端「附近钓位」需等 14s 才出结果，被用户当成服务不可用 |
+| v2.0 | 2026-10-28 | 识别端点错误码细分：415 `IMAGE_EMPTY`/`IMAGE_CORRUPT`、503 `VISION_UNAVAILABLE`（按超时/上游错误/空回答/无法解析分文案）；前端透传 `detail.message` 不再自行概括 | 识别失败一律回「不支持的图片格式，请换一张」，把服务超时与文件损坏都说成格式问题，误导用户 |

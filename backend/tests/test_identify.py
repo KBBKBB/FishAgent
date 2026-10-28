@@ -28,7 +28,13 @@ from fishagent.core.image_guard import (
     read_upload,
 )
 from fishagent.errors import ApiError
-from fishagent.providers.vision_fish import VisionFish, VisionFishIdentifier, _parse_payload
+from fishagent.providers.vision_fish import (
+    VisionFailure,
+    VisionFish,
+    VisionFishIdentifier,
+    VisionUnavailable,
+    _parse_payload,
+)
 
 
 def run(coro):
@@ -57,6 +63,14 @@ def _png(size: tuple[int, int] = (120, 90), mode: str = "RGB") -> bytes:
     image = Image.new(mode, size, (30, 95, 135) if mode == "RGB" else 128)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
+    image.close()
+    return buffer.getvalue()
+
+
+def _jpeg_bytes(size: tuple[int, int] = (240, 180)) -> bytes:
+    image = Image.new("RGB", size, (30, 95, 135))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
     image.close()
     return buffer.getvalue()
 
@@ -154,16 +168,69 @@ def test_decode_trusts_pillow_not_the_extension():
 
 
 def test_decode_rejects_non_images():
+    """A non-image cannot be read as an image, and says exactly that.
+
+    Note the wording: Pillow raises ``UnidentifiedImageError`` for *both* "this
+    isn't an image" and "this is an image no installed opener handles", so the
+    message claims neither — it only states what is certain (it could not be
+    read as an image) and still lists what would be accepted.
+    """
     with pytest.raises(ApiError) as excinfo:
         normalize(b"this is not an image at all", max_side=1280)
     assert excinfo.value.status_code == 415
+    assert excinfo.value.code == "UNSUPPORTED_MEDIA_TYPE"
+    assert "无法作为图片读取" in excinfo.value.message
+    assert "请选择一张" in excinfo.value.message
 
 
 def test_decode_rejects_truncated_image():
-    truncated = _png()[:40]
+    """A truncated image is corrupt, NOT an unsupported format.
+
+    Regression: this used to answer "不支持的图片格式", sending the user off to
+    try a different file format when the actual fix is to re-send the file.
+    Cut inside the pixel data so the header still parses — that is the case
+    where the distinction is real (a header Pillow cannot read at all is
+    indistinguishable from a non-image, and gets the format message).
+    """
+    source = _jpeg_bytes()
+    truncated = source[: len(source) // 2]
     with pytest.raises(ApiError) as excinfo:
         normalize(truncated, max_side=1280)
     assert excinfo.value.status_code == 415
+    assert excinfo.value.code == "IMAGE_CORRUPT"
+    assert "损坏" in excinfo.value.message
+    assert "格式" not in excinfo.value.message
+
+
+def test_corrupt_and_unsupported_are_distinguishable():
+    """The 415s must never be collapsed into one message.
+
+    Three causes, three sentences: a damaged file needs re-exporting, a file
+    that was never an image needs replacing, and a real image in a format we
+    do not take needs converting. One shared sentence sends every user down
+    the same wrong path.
+    """
+    source = _jpeg_bytes()
+    with pytest.raises(ApiError) as corrupt:
+        normalize(source[: len(source) // 2], max_side=1280)
+    with pytest.raises(ApiError) as not_image:
+        normalize(b"plain text, not an image", max_side=1280)
+    with pytest.raises(ApiError) as bad_format:
+        buffer = io.BytesIO()
+        Image.new("RGB", (60, 40), (1, 2, 3)).save(buffer, format="BMP")
+        normalize(buffer.getvalue(), max_side=1280)
+
+    assert corrupt.value.code == "IMAGE_CORRUPT"
+    # Both unreadable-header and unlisted-format share the code (from the bytes
+    # alone they cannot be told apart) but not the sentence.
+    assert not_image.value.code == "UNSUPPORTED_MEDIA_TYPE"
+    assert bad_format.value.code == "UNSUPPORTED_MEDIA_TYPE"
+    messages = {
+        corrupt.value.message,
+        not_image.value.message,
+        bad_format.value.message,
+    }
+    assert len(messages) == 3, f"415 messages collapsed: {messages}"
 
 
 @pytest.mark.parametrize("fmt", ["BMP", "TIFF"])
@@ -175,6 +242,7 @@ def test_decode_rejects_unlisted_formats(fmt):
     with pytest.raises(ApiError) as excinfo:
         normalize(buffer.getvalue(), max_side=1280)
     assert excinfo.value.status_code == 415
+    assert excinfo.value.code == "UNSUPPORTED_MEDIA_TYPE"
 
 
 # --- HEIC / AVIF: the iPhone default ---------------------------------------
@@ -651,8 +719,72 @@ def test_identifier_never_uses_reasoning_content():
     """Empty content is a failure even when reasoning_content is present."""
     client = _Client("")
     identifier = VisionFishIdentifier(client, "m")
-    assert run(identifier.identify(_png())) is None
+    with pytest.raises(VisionUnavailable) as excinfo:
+        run(identifier.identify(_png()))
+    assert excinfo.value.reason == VisionFailure.EMPTY_ANSWER
     assert client.chat.completions.calls == 1
+
+
+def test_identifier_types_a_timeout():
+    """A timeout must be reported as a timeout, not as "no fish"."""
+
+    class _Slow:
+        async def create(self, **kwargs):
+            await asyncio.sleep(5)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=_Slow()))
+    identifier = VisionFishIdentifier(client, "m", timeout_seconds=0.05)
+    with pytest.raises(VisionUnavailable) as excinfo:
+        run(identifier.identify(_png()))
+    assert excinfo.value.reason == VisionFailure.TIMEOUT
+
+
+def test_identifier_types_an_upstream_error():
+    identifier = VisionFishIdentifier(_Client(None, exc=RuntimeError("boom")), "m")
+    with pytest.raises(VisionUnavailable) as excinfo:
+        run(identifier.identify(_png()))
+    assert excinfo.value.reason == VisionFailure.UPSTREAM_ERROR
+
+
+@pytest.mark.parametrize("exc_name", ["APITimeoutError", "ReadTimeout", "ConnectTimeout"])
+def test_a_transport_timeout_is_not_an_upstream_error(exc_name):
+    """The SDK's own timeouts do not subclass ``TimeoutError``.
+
+    ``openai.APITimeoutError`` inherits from ``openai.APIError`` and
+    ``httpx.ReadTimeout`` from ``httpx.TimeoutException``, so an ``except
+    TimeoutError`` misses both. Only the outer ``wait_for`` timer happens to
+    catch them in practice, and when the client's own timeout is the shorter
+    one the failure was reported as "service unavailable" — a different story
+    for the user, with a different fix.
+    """
+    httpx = pytest.importorskip("httpx")
+    openai = pytest.importorskip("openai")
+    request = httpx.Request("POST", "http://127.0.0.1:9/v1/chat/completions")
+    if exc_name == "APITimeoutError":
+        exc = openai.APITimeoutError(request=request)
+    else:
+        exc = getattr(httpx, exc_name)(f"timeout {exc_name}", request=request)
+    assert not isinstance(exc, TimeoutError), "guard: the premise of this test"
+
+    identifier = VisionFishIdentifier(_Client(None, exc=exc), "m")
+    with pytest.raises(VisionUnavailable) as excinfo:
+        run(identifier.identify(_png()))
+    assert excinfo.value.reason == VisionFailure.TIMEOUT
+
+
+def test_identifier_types_an_unparsable_answer():
+    identifier = VisionFishIdentifier(_Client("这不是 JSON"), "m")
+    with pytest.raises(VisionUnavailable) as excinfo:
+        run(identifier.identify(_png()))
+    assert excinfo.value.reason == VisionFailure.UNPARSABLE_ANSWER
+
+
+def test_a_negative_answer_is_a_result_not_a_failure():
+    """identified=false is the model answering, and must not raise."""
+    answer = '{"identified":false,"species":null}'
+    result = run(VisionFishIdentifier(_Client(answer), "m").identify(_png()))
+    assert result is not None
+    assert result.identified is False
 
 
 def test_identifier_tolerates_fenced_json():
@@ -661,12 +793,8 @@ def test_identifier_tolerates_fenced_json():
     assert result is not None and result.species == "鲤鱼"
 
 
-def test_identifier_returns_none_on_call_failure():
-    identifier = VisionFishIdentifier(_Client(None, exc=RuntimeError("boom")), "m")
-    assert run(identifier.identify(_png())) is None
-
-
 def test_identifier_returns_none_without_image():
+    """No image bytes is a local guard, not a service failure."""
     identifier = VisionFishIdentifier(_Client('{"identified":true}'), "m")
     assert run(identifier.identify(b"")) is None
 
@@ -870,3 +998,101 @@ def test_identify_reports_oversize_resolution_as_its_own_code(client, monkeypatc
     )
     detail = assert_unified_error(response, 413, "IMAGE_TOO_LARGE")
     assert "2000" in detail["message"] and "1500" in detail["message"]
+
+
+# --- honest failure reporting ------------------------------------------------
+#
+# The service must never answer "couldn't identify the fish, try a clearer
+# photo" when the truth is that our own call timed out. Blaming the user's
+# photo for our outage sends them to fix something that is not broken.
+
+
+def _patch_identifier(monkeypatch, *, raise_reason=None, result=None):
+    from fishagent.api import identify as identify_api
+
+    class _Fake:
+        async def identify(self, jpeg, *, media_type="image/jpeg", note=None):
+            if raise_reason is not None:
+                raise VisionUnavailable(raise_reason)
+            return result
+
+    monkeypatch.setattr(identify_api, "get_vision_identifier", lambda settings: _Fake())
+    monkeypatch.setattr(identify_api, "_require_llm_configured", lambda: None)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "mock_mode", False, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("reason", "expect_fragment"),
+    [
+        (VisionFailure.TIMEOUT, "超时"),
+        (VisionFailure.UPSTREAM_ERROR, "不可用"),
+        (VisionFailure.EMPTY_ANSWER, "没有返回有效结果"),
+        (VisionFailure.UNPARSABLE_ANSWER, "无法解析"),
+    ],
+)
+def test_service_failure_is_not_reported_as_an_unidentified_fish(
+    client, monkeypatch, reason, expect_fragment
+):
+    """A call failure answers 503 with the real cause, never 200 + "no fish"."""
+    _patch_identifier(monkeypatch, raise_reason=reason)
+
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("fish.jpg", _jpeg_bytes(), "image/jpeg")},
+    )
+
+    detail = assert_unified_error(response, 503, "VISION_UNAVAILABLE")
+    assert expect_fragment in detail["message"]
+    assert "格式" not in detail["message"], "a service failure is not a format problem"
+    assert "换一张更清晰" not in detail["message"], "must not blame the photo"
+
+
+def test_timeout_message_does_not_tell_the_user_to_retake_the_photo(
+    client, monkeypatch
+):
+    _patch_identifier(monkeypatch, raise_reason=VisionFailure.TIMEOUT)
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("fish.jpg", _jpeg_bytes(), "image/jpeg")},
+    )
+    message = response.json()["detail"]["message"]
+    assert "照片的问题" in message, "should explicitly clear the photo of blame"
+    assert "稍后重试" in message
+
+
+def test_a_genuine_negative_answer_stays_a_200(client, monkeypatch):
+    """identified=false is still a successful call and must stay 200."""
+    _patch_identifier(monkeypatch, result=VisionFish(identified=False))
+
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("fish.jpg", _jpeg_bytes(), "image/jpeg")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["identified"] is False
+    assert body["species"] is None
+    assert "未能识别出鱼的种类" in (body.get("message") or "")
+
+
+def test_empty_upload_has_its_own_code(client):
+    """An empty file is not an unsupported format."""
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("empty.jpg", b"", "image/jpeg")},
+    )
+    detail = assert_unified_error(response, 415, "IMAGE_EMPTY")
+    assert "为空" in detail["message"]
+
+
+def test_corrupt_upload_reaches_the_client_with_its_own_message(client):
+    """End-to-end: a truncated JPEG reports corruption, not unsupported format."""
+    source = _jpeg_bytes((400, 300))
+    response = client.post(
+        "/api/agent/identify-fish",
+        files={"image": ("broken.jpg", source[: len(source) // 2], "image/jpeg")},
+    )
+    detail = assert_unified_error(response, 415, "IMAGE_CORRUPT")
+    assert "损坏" in detail["message"]

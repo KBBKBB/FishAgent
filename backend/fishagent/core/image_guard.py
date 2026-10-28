@@ -120,7 +120,18 @@ def _decode_admission(
         return admission
     return entry[1]
 
+# Three different failures used to share one message ("unsupported format"),
+# which is only true for the first of them. A photo truncated in transit or a
+# file that merely isn't an image are not a format problem, and telling the user
+# to change formats sends them looking for the wrong fix.
 _UNSUPPORTED_MESSAGE = "不支持的图片格式，请上传 JPEG/PNG/WEBP/GIF/HEIC 图片"
+_CORRUPT_MESSAGE = "图片文件已损坏或不完整，请重新选择或重新拍摄"
+# Pillow raises ``UnidentifiedImageError`` when it cannot read a header at all.
+# That covers two causes we cannot tell apart from the bytes alone — the file
+# is not an image (a PDF, a text file), or it is an image in a format Pillow has
+# no opener for (camera RAW). The message therefore claims neither: it says the
+# file could not be read as an image, and still lists what would work.
+_NOT_IMAGE_MESSAGE = "这个文件无法作为图片读取，请选择一张 JPEG/PNG/WEBP/GIF/HEIC 鱼获照片"
 
 
 class AsyncByteReader(Protocol):
@@ -158,6 +169,25 @@ def _unsupported(message: str = _UNSUPPORTED_MESSAGE) -> ApiError:
         status_code=415,
         code="UNSUPPORTED_MEDIA_TYPE",
         message=message,
+    )
+
+
+def _not_an_image() -> ApiError:
+    """Pillow could not read a header: not a format we handle, or not a file.
+
+    Shares the 415 status and ``UNSUPPORTED_MEDIA_TYPE`` code with a rejected
+    format — from the bytes alone the two are indistinguishable — but carries
+    its own wording so a user who uploaded a PDF is not told to "change format".
+    """
+    return _unsupported(_NOT_IMAGE_MESSAGE)
+
+
+def _corrupt() -> ApiError:
+    """The header parsed but the body did not: a truncated or damaged file."""
+    return ApiError(
+        status_code=415,
+        code="IMAGE_CORRUPT",
+        message=_CORRUPT_MESSAGE,
     )
 
 
@@ -199,7 +229,11 @@ async def read_upload(upload: AsyncByteReader, *, max_upload_bytes: int) -> byte
         chunks.append(chunk)
     data = b"".join(chunks)
     if not data:
-        raise _unsupported("图片内容为空")
+        raise ApiError(
+            status_code=415,
+            code="IMAGE_EMPTY",
+            message="图片内容为空，请重新选择文件",
+        )
     return data
 
 
@@ -242,9 +276,10 @@ def decode_and_normalize(
     except ApiError:
         raise
     except (OSError, ValueError, SyntaxError):
-        # A file that decodes just enough to pass the header check but fails
-        # during resize/convert is still an unusable image, not a server error.
-        raise _unsupported() from None
+        # The header and body decoded (``_open_verified`` forced a full load),
+        # but resize/convert still failed. That is a damaged or partly decodable
+        # file, not a format we do not accept — the format is one of ours.
+        raise _corrupt() from None
     finally:
         source.close()
     if not jpeg:
@@ -354,15 +389,20 @@ def _open_verified(data: bytes, *, max_image_pixels: int) -> Image.Image:
     except UnidentifiedImageError:
         if image is not None:
             image.close()
-        logger.info("upload rejected: not a decodable image (unidentified)")
-        raise _unsupported() from None
+        # Pillow could not read a header at all. That is either "not an image"
+        # (a PDF, a text file) or an image in a format no installed opener
+        # handles — we cannot tell which, so we do not claim it is a format
+        # problem, and we still name the formats that do work.
+        logger.info("upload rejected: no readable image header (unidentified)")
+        raise _not_an_image() from None
     except (OSError, ValueError, SyntaxError, EOFError) as exc:
         if image is not None:
             image.close()
-        # The exception type is the useful part for diagnosis (corrupt body vs
-        # unsupported feature); the payload itself is never logged.
-        logger.info("upload rejected: decode failed (%s)", type(exc).__name__)
-        raise _unsupported() from None
+        # The header parsed (format was accepted above) but the body did not:
+        # a truncated or corrupt file. The format is fine — telling the user to
+        # switch formats would be wrong advice.
+        logger.info("upload rejected: corrupt image body (%s)", type(exc).__name__)
+        raise _corrupt() from None
     return image
 
 

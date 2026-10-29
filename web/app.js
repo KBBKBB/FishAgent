@@ -2353,7 +2353,7 @@
         { start: '05:30', end: '08:00', label: '日出窗口' },
         { start: '16:30', end: '18:30', label: '日落窗口' }
       ],
-      water_depth: '先钓 1.5–2m 浅滩，无口则转 3m 以上',
+      water_depth: '先钓 2–2.5m 滩口，无口再试 2.5–3m 斜坡（有风增氧可钓浅）',
       suitable_species: ['鲫鱼', '鲤鱼'],
       alerts: [
         {

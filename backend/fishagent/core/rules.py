@@ -6,6 +6,7 @@ produce the same result, which keeps the HTTP layer and tests deterministic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -334,16 +335,67 @@ def _best_windows(band: str, weather: WeatherSnapshot) -> list[BestWindow]:
     return [sunrise, _sunset_window(weather)]
 
 
-def _suitable_species(temperature: float, species: str | None) -> list[str]:
-    if temperature >= 25:
-        base = ["草鱼", "鲢鳙"]
-    elif temperature >= 15:
-        base = ["鲫鱼", "鲤鱼"]
+def _suitable_species(
+    weather: WeatherSnapshot,
+    local_now: datetime,
+    species: str | None,
+    *,
+    band: str | None = None,
+) -> list[str]:
+    """Species that fit the weather, ranked.
+
+    Previously this read the temperature alone, which drifted out of step with
+    the depth advice as soon as that started using the other factors: the card
+    could say "钓 4–5m 深水" while still recommending warm-water 草鱼/鲢鳙. Both
+    now read the same ``_depth_plan``, so the two lines agree by construction.
+
+    A requested ``species`` is always kept first — the contract requires that a
+    valid request for a species is reflected in the answer. It is not removed
+    for disagreeing with the weather: the user asked about *their* target, and
+    silently dropping it would answer a different question.
+    """
+    if band == "劝退":
+        # The contract requires this list to be non-empty in every band, so it
+        # cannot be []. On a day we advise against going there is no honest
+        # "suitable" species, so the value is a placeholder and the UI hides the
+        # line (same rule as water_depth). Keeping it non-empty matters for API
+        # consumers that would treat [] as "no data" rather than "do not go".
+        requested = [species] if species in ALLOWED_SPECIES else []
+        return requested or ["鲫鱼"]
+
+    plan = _depth_plan(weather, local_now)
+    # Warm, well-oxygenated water and a shallow start favour the active feeders.
+    # Deep cold water favours the bottom-dwelling 鲫鱼/鲤鱼.
+    if plan.index <= 2 and weather.temperature >= 22:
+        base = ["草鱼", "鲢鳙", "鲤鱼"]
+    elif plan.index <= 3 and weather.temperature >= 15:
+        base = ["鲫鱼", "鲤鱼", "草鱼"]
     else:
-        base = ["鲫鱼"]
+        base = ["鲫鱼", "鲤鱼"]
     if species and species in ALLOWED_SPECIES:
         return [species] + [item for item in base if item != species]
     return base
+
+
+@dataclass(frozen=True)
+class _DepthPlan:
+    """Where the advice points and why; the single source both lines read."""
+
+    index: int
+    modifiers: list[tuple[int, str]]
+    shift: int
+
+
+def _depth_plan(weather: WeatherSnapshot, local_now: datetime) -> _DepthPlan:
+    """Resolve the starting rung and the modifiers that produced it."""
+    modifiers = _depth_modifiers(weather, local_now)
+    shift = max(
+        -_MAX_DEPTH_SHIFT,
+        min(_MAX_DEPTH_SHIFT, sum(delta for delta, _ in modifiers)),
+    )
+    index = _depth_base_index(weather.temperature) + shift
+    index = max(0, min(len(_DEPTH_LADDER) - 1, index))
+    return _DepthPlan(index=index, modifiers=modifiers, shift=shift)
 
 
 def _water_depth(
@@ -371,19 +423,16 @@ def _water_depth(
     """
     if band == "劝退":
         return "今日不建议出钓，无水深策略"
-    index = _depth_base_index(weather.temperature)
-    modifiers = _depth_modifiers(weather, local_now)
-    shift = max(-_MAX_DEPTH_SHIFT, min(_MAX_DEPTH_SHIFT, sum(delta for delta, _ in modifiers)))
-    index = max(0, min(len(_DEPTH_LADDER) - 1, index + shift))
+    plan = _depth_plan(weather, local_now)
 
-    primary = _DEPTH_LADDER[index]
+    primary = _DEPTH_LADDER[plan.index]
     # Warm water: start shallow and move deeper. Cold water: the shallows warm
     # first, so the fallback goes the other way.
-    step = _DEPTH_FALLBACK_STEP if index <= 2 else -_DEPTH_FALLBACK_STEP
-    fallback = _DEPTH_LADDER[max(0, min(len(_DEPTH_LADDER) - 1, index + step))]
+    step = _DEPTH_FALLBACK_STEP if plan.index <= 2 else -_DEPTH_FALLBACK_STEP
+    fallback = _DEPTH_LADDER[max(0, min(len(_DEPTH_LADDER) - 1, plan.index + step))]
 
     text = f"先钓 {primary}，无口再试 {fallback}"
-    reason = _dominant_depth_reason(modifiers, shift)
+    reason = _dominant_depth_reason(plan.modifiers, plan.shift)
     if reason:
         text += f"（{reason}）"
     return text
@@ -605,6 +654,8 @@ def compute_fish_activity(
         top_factors=top_factors,
         best_windows=_best_windows(band, weather),
         water_depth=_water_depth(weather, local_now, band=band),
-        suitable_species=_suitable_species(weather.temperature, species),
+        suitable_species=_suitable_species(
+            weather, local_now, species, band=band
+        ),
         alerts=alerts,
     )

@@ -1130,7 +1130,11 @@
     var infoGrid = el('div', 'info-grid');
     infoGrid.append(renderWindows(activity.best_windows));
     infoGrid.append(renderTextInfo('建议水深', activity.water_depth || '暂无建议'));
-    infoGrid.append(renderSpecies(activity.suitable_species));
+    // 劝退档不给鱼种：后端此时只会回一个占位值，展示出来会读成"今天适合钓这个"，
+    // 与同一屏的"今天不建议出钓"矛盾——和隐藏水深策略是同一个理由。
+    if (activity.band !== '劝退') {
+      infoGrid.append(renderSpecies(activity.suitable_species));
+    }
     fragment.append(infoGrid);
 
     if (Array.isArray(activity.alerts) && activity.alerts.length) {
@@ -2354,7 +2358,7 @@
         { start: '16:30', end: '18:30', label: '日落窗口' }
       ],
       water_depth: '先钓 2–2.5m 滩口，无口再试 2.5–3m 斜坡（有风增氧可钓浅）',
-      suitable_species: ['鲫鱼', '鲤鱼'],
+      suitable_species: ['鲫鱼', '鲤鱼', '草鱼'],
       alerts: [
         {
           code: 'DATA_FALLBACK',

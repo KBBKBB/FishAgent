@@ -1230,6 +1230,16 @@ h3 {
   color: var(--ink-soft);
 }
 
+/* 由水域类型推导的参考值：不是该水域的实测/网友报告，弱化呈现，
+   与"查到了具体来源"的结果区分开。 */
+.spot-species[data-typical="true"] {
+  color: var(--ink-soft);
+}
+
+.spot-species[data-typical="true"] .spot-species-label {
+  color: var(--ink-soft);
+}
+
 .precision-warn {
   margin-top: 8px;
   padding: 6px 9px;
@@ -1444,8 +1454,248 @@ h3 {
 
 .chat-form {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-top: 10px;
+  min-width: 0;
+}
+
+.chat-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #cfe3d7;
+  background: #f4faf6;
+  color: var(--brand-ink);
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.chat-tool-btn:hover:not(:disabled) {
+  background: var(--brand-soft);
+  border-color: #b7dcc9;
+}
+
+.chat-tool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-tool-btn.is-loading {
+  background: var(--brand-soft);
+  border-color: #b7dcc9;
+  animation: tool-pulse 1.1s infinite ease-in-out;
+}
+
+.chat-tool-btn svg {
+  display: block;
+}
+
+.chat-tool-camera[hidden] {
+  display: none !important;
+}
+
+@keyframes tool-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 图片识别消息 */
+.msg-user-image .msg-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  max-width: 100%;
+}
+
+.msg-image {
+  display: block;
+  line-height: 0;
+}
+
+/* 缩略图本身就是"查看大图"的按钮。border/padding 归零，让它看起来仍是
+   一张图，同时保留 button 的键盘焦点与触摸语义。 */
+.msg-image-open {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.msg-image-open:focus-visible {
+  outline: 3px solid rgba(14, 107, 82, 0.4);
+  outline-offset: 2px;
+}
+
+.msg-thumb {
+  display: block;
+  width: 168px;
+  max-width: 100%;
+  height: auto;
+  max-height: 168px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: #dcefe6;
+}
+
+.msg-image-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.msg-image-note {
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  opacity: 0.9;
+}
+
+/* 就地取消入口：手机上想换一张，不必回头去找工具栏按钮。
+   触摸目标至少 32px，避免误触。 */
+.msg-image-cancel {
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid #cfe3d7;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--brand-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.msg-image-cancel:hover {
+  background: var(--brand-soft);
+}
+
+.msg-identify {
+  max-width: 100%;
+}
+
+.identify-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.identify-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.identify-species {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.confidence-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.confidence-high {
+  background: #d9f0e2;
+  color: #14713f;
+}
+
+.confidence-medium {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.confidence-low {
+  background: #eceeed;
+  color: var(--ink-soft);
+}
+
+.identify-row {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.identify-label {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.identify-text {
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.identify-bubble .chips {
+  margin-top: 2px;
+}
+
+.identify-bubble .chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.identify-catalog-note {
+  padding: 6px 9px;
+  border-radius: 8px;
+  border-left: 3px solid #c9a26a;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.identify-disclosure {
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.identify-empty {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.identify-hint {
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 
 .chat-form input {
@@ -1651,6 +1901,146 @@ h3 {
   .btn {
     padding-inline: 14px;
   }
+
+  .chat-form {
+    gap: 6px;
+  }
+
+  .chat-tools {
+    gap: 4px;
+  }
+
+  .chat-tool-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  .chat-form .btn {
+    padding-inline: 12px;
+    font-size: 13.5px;
+  }
+
+  .msg-thumb {
+    width: 140px;
+    max-height: 140px;
+  }
+
+  .identify-species {
+    font-size: 14.5px;
+  }
+}
+
+/* --- 图片大图查看 ------------------------------------------------------ */
+
+.image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 20, 16, 0.94);
+  /* 遮罩打开时不允许背景滚动，否则手机上放大后的拖动会和页面滚动打架。 */
+  overscroll-behavior: contain;
+}
+
+.image-viewer[hidden] {
+  display: none;
+}
+
+body.has-image-viewer {
+  overflow: hidden;
+}
+
+.image-viewer-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 12px;
+  transform-origin: center center;
+  will-change: transform;
+  /* 缩放后内容会溢出自己的盒子：必须裁剪，否则放大的图片会盖住工具栏，
+     用户点不到「关闭」。overflow 同时让拖动只在可视区内发生。 */
+  overflow: hidden;
+}
+
+.image-viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
+  cursor: zoom-in;
+  /* 拖动时不要触发浏览器的原生图片拖拽，也不要选中。 */
+  -webkit-user-drag: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.image-viewer-img.is-zoomed {
+  cursor: grab;
+}
+
+.image-viewer-img.is-dragging {
+  cursor: grabbing;
+}
+
+.image-viewer-toolbar {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  /* 工具栏始终压在缩放后的图片之上，并自带不透明底，避免图片透上来。 */
+  background: rgba(8, 20, 16, 0.94);
+}
+
+.image-viewer-btn {
+  min-width: 56px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4faf6;
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.image-viewer-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.image-viewer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.image-viewer-close {
+  margin-left: 6px;
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+
+.image-viewer-close:hover {
+  background: #fff;
+}
+
+.image-viewer-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

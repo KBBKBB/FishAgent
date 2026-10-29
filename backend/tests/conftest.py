@@ -15,10 +15,14 @@ REPO_ROOT = BACKEND_ROOT.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-# QA runs are deterministic and must never touch real providers.
+# QA runs are deterministic and must never touch real providers. These are set
+# before any settings import so a developer's backend/.env cannot leak in and
+# make the suite query live search engines.
 os.environ["FISHAGENT_MOCK_MODE"] = "true"
 os.environ["AMAP_WEB_KEY"] = ""
 os.environ["LLM_API_KEY"] = ""
+os.environ["FISHAGENT_SPECIES_PROVIDER"] = ""
+os.environ["FISHAGENT_SPECIES_PAGE_FETCH"] = "false"
 
 HANGZHOU = {"lat": 30.2741, "lon": 120.1551}
 BEIJING = {"lat": 39.915, "lon": 116.404}
@@ -68,6 +72,21 @@ def client(app):
 
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def _clear_service_caches():
+    """Isolate tests from the process-wide caches in the service layer.
+
+    Spot recommendations are cached for 180 s, so without this a test that
+    queries the same location would silently assert against the previous
+    test's response.
+    """
+    from fishagent.services.spots import reset_spot_cache
+
+    reset_spot_cache()
+    yield
+    reset_spot_cache()
 
 
 def fish_params(**overrides: Any) -> dict[str, Any]:

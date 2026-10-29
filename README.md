@@ -8,7 +8,8 @@
 
 - **鱼情分析**：F1–F7 七因子规则引擎，0–100 评分、五档结论、Top 3 因子解释、最佳时段 / 水深 / 鱼种建议；暴雨、雷雨、大风等场景强制提示。
 - **钓位推荐**：水域 POI 双路召回思路 + 入口坐标 + 去/回程分别精算，按往返 ≤ 2 小时过滤；禁钓区保守排除；按鱼情、水域类型、鱼种适配度与车程综合排序。
-- **推荐鱼种**：每个钓位卡异步展示小红书网友分享的鱼种；查不到时明确提示「暂无相关鱼种推荐」。来源与「仅供参考」标识随结果展示。
+- **推荐鱼种**：每个钓位卡异步展示公开搜索结果中的鱼种（Bing 检索 + 结果页正文抽取）；查不到时明确提示「暂无相关鱼种推荐」，查询失败则区分展示「鱼种信息暂不可用」。来源与「仅供参考」标识随结果展示。
+- **图片识别鱼种**：Agent 板块支持上传照片识别鱼种（移动端可直接拍照），返回置信度、简要鱼类知识、钓饵推荐与注意事项；识别结果标注「AI 生成 · 仅供参考」。
 - **自然对话 Agent**：基于 LangGraph 的意图识别 → 工具调用 → 回答编排；未配置 LLM Key 时自动降级为确定性路由，三类典型问句可直接使用。
 - **H5 演示界面**：定位或手动坐标输入、评分卡与因子明细、钓位列表、对话区；移动端可用。
 - **Mock 模式**：无需任何外部 Key 即可启动与演示；真实数据源通过 Provider 隔离，配置 Key 后切换。
@@ -59,8 +60,9 @@ cd backend
 | `FISHAGENT_AMAP_QPS` | 真实模式请求起间隔上限，默认 2（按高德配额调整） |
 | `OPEN_METEO_BASE_URL` | 默认 `https://api.open-meteo.com/v1` |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | OpenAI 兼容 LLM 配置；DeepSeek 示例：`https://api.deepseek.com/v1` + `deepseek-chat`；缺省走兜底路由 |
-| `FISHAGENT_SPECIES_PROVIDER` | `mock` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`（不伪造社区数据） |
+| `FISHAGENT_SPECIES_PROVIDER` | `mock` / `bing` / `none` / `disabled`；留空时 Mock 模式用 `mock`，真实模式用 `none`（不伪造社区数据）；`bing` 用 Bing 搜索结果匹配鱼种（Phase 1） |
 | `FISHAGENT_SPECIES_TIMEOUT_SECONDS` | 鱼种查询超时，默认 4 秒；超时只降级该行展示 |
+| `FISHAGENT_SPECIES_PAGE_FETCH` | `true` 时抓取搜索结果页正文补充鱼种（Phase 2）；有 `LLM_API_KEY` 时同时启用 LLM 抽取，抽取调用计入 `FISHAGENT_LLM_DAILY_QUOTA` |
 | `FISHAGENT_SPECIES_CACHE_TTL_SECONDS` | 鱼种结果缓存秒数，默认 3600 |
 
 真实 Key 不随仓库分发；前端产物中不得出现任何 Key。
@@ -76,6 +78,7 @@ cd backend
 | GET | `/api/spots/recommend` | 钓位推荐、往返车程、禁钓过滤、排序 |
 | POST | `/api/spots/species` | 按钓位批量查询社区推荐鱼种（异步填充，不影响钓位主流程） |
 | POST | `/api/agent/chat` | 自然语言对话（LangGraph Agent） |
+| POST | `/api/agent/identify-fish` | 上传/拍摄照片识别鱼种，返回简要知识、习性与钓饵推荐（multipart） |
 
 完整字段与约束见 [`docs/api-contract.md`](docs/api-contract.md)。启动后可在 `/docs` 查看 OpenAPI。
 

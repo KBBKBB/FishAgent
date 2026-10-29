@@ -217,8 +217,31 @@
 
 - 后端：`SpeciesProvider` 协议；`MockSpeciesProvider`（确定性、覆盖有/无推荐两条路径）与 `NullSpeciesProvider`；`POST /api/spots/species`；鱼种别名归一、白名单、去重、单钓位最多 4 个；按归一化 `(name, water_type)` 元组缓存（成功 3600s，空/降级 `min(TTL, 300)`）；超时/异常/异常载荷降级为 200 + **全部空结果** + `degraded=true`。
 - H5：钓位卡新增“推荐鱼种：…”行，附来源与“仅供参考”；先渲染钓位、后异步补齐；空结果显示“暂无相关鱼种推荐”；鱼种请求 4.5s 超时、401 不全局跳转、空名钓位过滤、按 `spot_id` 映射，降级文案与空结果区分。
-- 配置：`FISHAGENT_SPECIES_PROVIDER`（`mock` / `none` / `disabled`）、`FISHAGENT_SPECIES_TIMEOUT_SECONDS`、`FISHAGENT_SPECIES_CACHE_TTL_SECONDS`。
+- 配置：`FISHAGENT_SPECIES_PROVIDER`（`mock` / `bing` / `none` / `disabled`）、`FISHAGENT_SPECIES_TIMEOUT_SECONDS`、`FISHAGENT_SPECIES_CACHE_TTL_SECONDS`。
 - 非范围：真实小红书抓取（需 Cookie 或第三方授权）、Agent 对话引用鱼种、按用户个性化、鱼获数据。
+
+**数据源调研（2026-10-26）**
+
+- `astron-xiaohongshu-mcp 0.1.5` 实测：仅暴露 5 个工具，搜索函数未注册为 MCP 工具；游客态搜索页 HTML 无笔记数据（0 条），无法按钓位检索小红书。另 `mcp>=2` 会导致 `mcp.server.fastmcp` 缺失，需手动降级 `mcp<2`。
+- 百度：requests 与 headless Chrome 访问均强制跳转图形验证码，无法自动检索。
+- Bing：可用，但 `site:xiaohongshu.com` 无效、小红书内容几乎无收录；对多词查询会退化为只匹配首个专有名词。
+- 结论：先用 **Bing 结果摘要 + 白名单匹配**（Phase 1，不抓正文、不依赖 LLM）。
+
+**Phase 2（2026-10-26）**
+
+- 开启 `FISHAGENT_SPECIES_PAGE_FETCH` 后，摘要命中不足 2 个鱼种时抓取结果页正文：先做白名单匹配，配置 `LLM_API_KEY` 后再由 LLM 抽取遗漏项。
+- 预算按请求计：最多 6 次页面抓取、4 次 LLM 调用；单页上限 512KB、送模型正文截断 4000 字符。
+- SSRF 防护：仅允许 http(s) 且只解析到公网地址的 URL，拒绝私网/环回/链路本地/保留地址；二进制类型直接跳过。
+- 实测：千岛湖由摘要的 1 个鱼种提升到 4 个（`鲫鱼/鲤鱼/草鱼/鲢鳙`），未使用 LLM。
+- 已知限制：知乎、头条、搜狐等页面为 JS 渲染或强反爬，抓取返回空正文；部分水域的搜索结果被政府/旅游门户占据，正文不含鱼种。
+- 结论：Phase 2 明显提升可达页面的召回，但无法覆盖 JS 渲染站点；真实覆盖率仍取决于 Bing 是否收录该水域的垂钓内容。
+
+**搜索服务选型裁决（2026-10-26，人类确认）**
+
+- **决定：维持现有 Bing 网页爬取方案**，不接入任何付费搜索 API。
+- Bing Search API 已停用，无法购买：官方定价页与 Azure `cognitive-services/search-api` 定价页均 404；`bing-web-search` 文档被 301 重定向到 `previous-versions`；Azure 零售价格 API 按 `Bing` 过滤返回 0 条计费项。原免费档（F1）随产品下线。
+- 替代品 `Grounding with Bing Search` 不适配：官方明确「开发者拿不到原始搜索结果」，它返回模型回答与引用，而非结构化结果数组，与本功能「取 N 个 URL 再抓正文」的形态不符，且需整包接入 Azure Agent Service。
+- 已知代价：现方案为未授权爬取，有被限流或封 IP 的风险；若后续需要合规与稳定性，优先评估 Brave Search API（免费 2000 次/月、返回结构化结果、不绑定 Agent 框架），其现有抓取与白名单匹配逻辑可直接复用。
 
 **验收**
 

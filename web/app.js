@@ -10,7 +10,20 @@
   var DEFAULT_RADIUS_KM = 50;
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
-  var SPECIES_TIMEOUT_MS = 4500;
+  // 后端自己的预算是 FISHAGENT_SPECIES_TIMEOUT_SECONDS（默认 4.0s），它会在预算
+  // 用完时返回 degraded 结果而不是一直等。前端的闹钟必须比它晚到，否则手机网络
+  // 上往返那几百毫秒就足以让前端先掐断——用户看到"请求超时"，而后端日志里其实是
+  // 200 OK，白丢一次已经查到的结果。留 3.5s 余量给移动网络和 JSON 落盘。
+  var SPECIES_TIMEOUT_MS = 7500;
+  // 鱼情分析要拉实时天气，正常 1.5-4s。
+  var ACTIVITY_TIMEOUT_MS = 15000;
+  // 钓位推荐每条候选都要调高德路径规划，而高德账号硬性限制 2 QPS，
+  // 10 个候选冷启动约 10s。给足余量，超时后提示"较慢"而不是"不可用"。
+  var SPOTS_TIMEOUT_MS = 45000;
+  var IDENTIFY_TIMEOUT_MS = 60000;
+  var IDENTIFY_MAX_BYTES = 8 * 1024 * 1024;
+  var IDENTIFY_MAX_NOTE = 100;
+  var IDENTIFY_MAX_BYTES_TEXT = '图片过大，请压缩后重试';
   var IOS_INSTALL_HINT_KEY = 'fishagent.iosInstallHintDismissed';
   var standaloneQuery =
     typeof window.matchMedia === 'function'
@@ -28,6 +41,7 @@
     '偏差': 'band-poor',
     '劝退': 'band-bad'
   };
+  var CONFIDENCE_LABELS = { high: '高置信度', medium: '中等置信度', low: '低置信度' };
 
   var state = {
     lat: DEFAULT_LOCATION.lat,
@@ -47,7 +61,9 @@
     spotsBusy: false,
     speciesByKey: {},
     speciesPending: {},
-    speciesError: {}
+    speciesError: {},
+    identifyBusy: false,
+    identifyRun: null
   };
 
   function $(id) {
@@ -59,6 +75,362 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  // --- 图片大图查看 -----------------------------------------------------
+  //
+  // 对话里的缩略图只有 168px，看不出鱼的特征，需要点开看原图。这里刻意
+  // 不引入图片地址缓存：缩略图在加载完成后就会 revokeObjectURL（见
+  // appendUserImageMessage），所以查看器的地址是打开时按 File 现造的，
+  // 关闭前再释放。图片始终只活在内存里，不落盘、不进 localStorage，
+  // 与 cr05 §8 的隐私承诺一致。
+  var IMAGE_VIEWER_ID = 'image-viewer';
+  var MAX_ZOOM = 4;
+  // 单例：每次点开缩略图都新建一个 session 会重复挂监听、重复造 DOM。
+  var imageViewerSession = null;
+
+  function buildImageViewer() {
+    if (imageViewerSession) return imageViewerSession;
+
+    var viewer = el('div', 'image-viewer');
+    viewer.id = IMAGE_VIEWER_ID;
+    viewer.hidden = true;
+    viewer.setAttribute('role', 'dialog');
+    viewer.setAttribute('aria-modal', 'true');
+    viewer.setAttribute('aria-label', '查看照片大图');
+
+    // 图片包在可拖动的舞台里：放大后可以移动查看局部。
+    var stage = el('div', 'image-viewer-stage');
+    var image = el('img', 'image-viewer-img');
+    image.alt = '鱼获照片大图';
+    image.draggable = false;
+    stage.append(image);
+
+    var toolbar = el('div', 'image-viewer-toolbar');
+    var zoomOut = el('button', 'image-viewer-btn', '缩小');
+    zoomOut.type = 'button';
+    zoomOut.setAttribute('aria-label', '缩小图片');
+    var zoomReset = el('button', 'image-viewer-btn', '1:1');
+    zoomReset.type = 'button';
+    zoomReset.setAttribute('aria-label', '恢复原始大小');
+    var zoomIn = el('button', 'image-viewer-btn', '放大');
+    zoomIn.type = 'button';
+    zoomIn.setAttribute('aria-label', '放大图片');
+    var closeBtn = el('button', 'image-viewer-btn image-viewer-close', '关闭');
+    closeBtn.type = 'button';
+    closeBtn.setAttribute('aria-label', '关闭大图');
+    toolbar.append(zoomOut, zoomReset, zoomIn, closeBtn);
+
+    // 遮罩自身的读屏播报区。不能借用页面上的 status-region：它默认 hidden，
+    // 隐藏元素上的 aria-live 不会被读出来。
+    var liveRegion = el('p', 'image-viewer-live');
+    liveRegion.setAttribute('role', 'status');
+    liveRegion.setAttribute('aria-live', 'polite');
+
+    viewer.append(stage, toolbar, liveRegion);
+    document.body.append(viewer);
+
+    function announce(message) {
+      liveRegion.textContent = '';
+      // 同一句话连着播报两次，读屏不会重读，隔一帧再写入。
+      window.setTimeout(function () {
+        liveRegion.textContent = message;
+      }, 30);
+    }
+
+    var session = {
+      viewer: viewer,
+      stage: stage,
+      image: image,
+      url: null,
+      scale: 1,
+      // 平移量以**屏幕像素**记录，与缩放无关：translate 先于 scale 应用，
+      // 所以这个值就是手指移动的距离，不需要除以 scale。
+      panX: 0,
+      panY: 0,
+      // 拖动 / 双指缩放需要记住起点。
+      pointers: {},
+      dragStart: null,
+      pinchStart: null,
+      restoreFocus: null,
+      listeners: []
+    };
+
+    function clampScale(value) {
+      if (value > MAX_ZOOM) return MAX_ZOOM;
+      if (value < 1) return 1;
+      return value;
+    }
+
+    // transform 用 translate 在前、scale 在后的顺序：先缩放坐标系、再平移，
+    // 平移量才是纯屏幕像素。反过来写会让拖动距离被 scale 二次放大，
+    // 放大倍数越高手感越飘。
+    function applyTransform() {
+      if (session.scale <= 1) {
+        session.panX = 0;
+        session.panY = 0;
+      }
+      stage.style.transform =
+        'translate(' + session.panX + 'px, ' + session.panY + 'px) ' +
+        'scale(' + session.scale + ')';
+      zoomOut.disabled = session.scale <= 1;
+      zoomIn.disabled = session.scale >= MAX_ZOOM;
+      image.classList.toggle('is-zoomed', session.scale > 1);
+    }
+
+    function resetView() {
+      session.scale = 1;
+      session.panX = 0;
+      session.panY = 0;
+      applyTransform();
+    }
+
+    // 以某个屏幕点为锚点缩放：该点在缩放前后保持不动，捏合才不会"跑"。
+    //
+    // 变换是 translate(pan) · scale(s)，屏幕位置 p = pan + s·q，q 是相对
+    // 舞台中心的点。要求锚点不动：pan' + s'·q = pan + s·q，解得
+    // pan' = pan + (s - s')·q。q 必须由**缩放前**的 pan 反推。
+    function zoomAt(nextScale, anchor) {
+      var next = clampScale(nextScale);
+      if (next === session.scale) return;
+      if (anchor && session.scale > 0) {
+        var rect = viewer.getBoundingClientRect();
+        var qx = (anchor.x - (rect.left + rect.width / 2) - session.panX) / session.scale;
+        var qy = (anchor.y - (rect.top + rect.height / 2) - session.panY) / session.scale;
+        session.panX += (session.scale - next) * qx;
+        session.panY += (session.scale - next) * qy;
+      }
+      session.scale = next;
+      applyTransform();
+    }
+
+    function zoomCenter(nextScale) {
+      zoomAt(nextScale, null);
+    }
+
+    function close() {
+      if (viewer.hidden) return;
+      viewer.hidden = true;
+      document.body.classList.remove('has-image-viewer');
+      resetView();
+      image.removeAttribute('src');
+      if (session.url) {
+        URL.revokeObjectURL(session.url);
+        session.url = null;
+      }
+      session.pointers = {};
+      session.dragStart = null;
+      session.pinchStart = null;
+      session.listeners.forEach(function (pair) {
+        document.removeEventListener(pair[0], pair[1]);
+      });
+      session.listeners = [];
+      var target = session.restoreFocus;
+      session.restoreFocus = null;
+      if (target && typeof target.focus === 'function') target.focus();
+      announce('已关闭大图');
+    }
+
+    zoomOut.addEventListener('click', function () {
+      zoomCenter(session.scale - 0.5);
+    });
+    zoomIn.addEventListener('click', function () {
+      zoomCenter(session.scale + 0.5);
+    });
+    zoomReset.addEventListener('click', resetView);
+    closeBtn.addEventListener('click', close);
+
+    // 点空白处关闭；点图片本身不关闭，否则放大后想拖图会误触。
+    viewer.addEventListener('click', function (event) {
+      if (event.target === viewer || event.target === stage) close();
+    });
+
+    // 双击在 1x 与 2x 之间切换——手机上最顺手的放大方式。
+    image.addEventListener('dblclick', function (event) {
+      event.preventDefault();
+      if (session.scale > 1) {
+        resetView();
+      } else {
+        zoomAt(2, anchorOf(event));
+      }
+    });
+
+    function anchorOf(event) {
+      if (typeof event.clientX !== 'number') return null;
+      return { x: event.clientX, y: event.clientY };
+    }
+
+    function pointerList() {
+      return Object.keys(session.pointers).map(function (id) {
+        return session.pointers[id];
+      });
+    }
+
+    function pinchState(points) {
+      return {
+        distance: Math.sqrt(
+          Math.pow(points[0].x - points[1].x, 2) +
+            Math.pow(points[0].y - points[1].y, 2)
+        ),
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2
+      };
+    }
+
+    image.addEventListener('pointerdown', function (event) {
+      if (event.pointerType === 'mouse' && event.button !== 0) return;
+      session.pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+      // 捕获指针：手指滑出图片边界时仍能收到 move，拖到边缘不会突然断掉。
+      if (typeof image.setPointerCapture === 'function') {
+        try {
+          image.setPointerCapture(event.pointerId);
+        } catch (error) {
+          /* 某些浏览器对已释放的指针会抛错，忽略即可 */
+        }
+      }
+      var points = pointerList();
+      if (points.length === 2) {
+        var pinch = pinchState(points);
+        session.pinchStart = {
+          distance: pinch.distance,
+          x: pinch.x,
+          y: pinch.y,
+          scale: session.scale,
+          panX: session.panX,
+          panY: session.panY
+        };
+        session.dragStart = null;
+        image.classList.remove('is-dragging');
+      } else if (points.length === 1 && session.scale > 1) {
+        session.dragStart = {
+          x: event.clientX,
+          y: event.clientY,
+          panX: session.panX,
+          panY: session.panY
+        };
+        image.classList.add('is-dragging');
+      }
+    });
+
+    image.addEventListener('pointermove', function (event) {
+      if (!(event.pointerId in session.pointers)) return;
+      session.pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+      var points = pointerList();
+
+      if (points.length >= 2 && session.pinchStart) {
+        event.preventDefault();
+        var pinch = pinchState(points);
+        if (!session.pinchStart.distance) return;
+        // 以两指中点为准同时缩放和平移，捏合时图片才跟着手走。
+        session.panX = session.pinchStart.panX + (pinch.x - session.pinchStart.x);
+        session.panY = session.pinchStart.panY + (pinch.y - session.pinchStart.y);
+        zoomAt(
+          session.pinchStart.scale * (pinch.distance / session.pinchStart.distance),
+          { x: pinch.x, y: pinch.y }
+        );
+        return;
+      }
+
+      if (session.dragStart && session.scale > 1) {
+        event.preventDefault();
+        session.panX = session.dragStart.panX + (event.clientX - session.dragStart.x);
+        session.panY = session.dragStart.panY + (event.clientY - session.dragStart.y);
+        applyTransform();
+      }
+    });
+
+    function endPointer(event) {
+      delete session.pointers[event.pointerId];
+      if (typeof image.releasePointerCapture === 'function') {
+        try {
+          image.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          /* 未捕获过的指针释放会抛错，忽略即可 */
+        }
+      }
+      var remaining = Object.keys(session.pointers).length;
+      if (remaining < 2) session.pinchStart = null;
+      if (remaining === 0) {
+        session.dragStart = null;
+        image.classList.remove('is-dragging');
+      }
+    }
+
+    image.addEventListener('pointerup', endPointer);
+    image.addEventListener('pointercancel', endPointer);
+    image.addEventListener('pointerleave', function (event) {
+      // 鼠标移出时左键可能仍按着；只在没有按键时收尾，避免拖动被中断。
+      if (event.pointerType === 'mouse' && event.buttons === 0) endPointer(event);
+    });
+
+    function onKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === '+' || event.key === '=') {
+        zoomCenter(session.scale + 0.5);
+      } else if (event.key === '-') {
+        zoomCenter(session.scale - 0.5);
+      } else if (event.key === '0') {
+        resetView();
+      } else if (event.key === 'Tab') {
+        // 焦点陷阱：全屏遮罩打开时，Tab 不应跑到背后的页面上。
+        keepFocusInside(event);
+      }
+    }
+
+    function keepFocusInside(event) {
+      // disabled 的按钮拿不到焦点，必须排除，否则当前位置算不出来，
+      // Tab 会原地不动（缩小按钮在 1x 时正是 disabled）。
+      var focusables = [zoomOut, zoomReset, zoomIn, closeBtn].filter(function (button) {
+        return !button.disabled;
+      });
+      var index = focusables.indexOf(document.activeElement);
+      if (index === -1) {
+        // 焦点跑到遮罩外面（或位于不可聚焦元素）时，拉回第一个按钮。
+        event.preventDefault();
+        if (focusables.length) focusables[0].focus();
+        return;
+      }
+      event.preventDefault();
+      var step = event.shiftKey ? -1 : 1;
+      var next = (index + step + focusables.length) % focusables.length;
+      focusables[next].focus();
+    }
+
+    function onResize() {
+      resetView();
+    }
+
+    session.open = function (file, name, trigger) {
+      if (!file) return;
+      resetView();
+      session.pointers = {};
+      session.dragStart = null;
+      session.pinchStart = null;
+      if (session.url) URL.revokeObjectURL(session.url);
+      session.url = URL.createObjectURL(file);
+      image.src = session.url;
+      image.alt = name || '鱼获照片大图';
+      viewer.hidden = false;
+      document.body.classList.add('has-image-viewer');
+      // 记住是哪个缩略图打开的，关闭后焦点回到它，键盘用户不会丢失位置。
+      session.restoreFocus = trigger || document.activeElement;
+      closeBtn.focus();
+      announce('已打开照片大图，按 Esc 或点关闭退出');
+      // 只在第一次打开时挂监听：重复打开不能再挂一遍，否则一次按键会
+      // 触发多次（close 会被调用两次，焦点回跳就会乱）。
+      if (!session.listeners.length) {
+        session.listeners.push(['keydown', onKeydown]);
+        session.listeners.push(['resize', onResize]);
+        document.addEventListener('keydown', onKeydown);
+        window.addEventListener('resize', onResize);
+      }
+    };
+
+    session.close = close;
+    imageViewerSession = session;
+    return session;
   }
 
   function makeSessionId() {
@@ -179,9 +551,21 @@
 
   function registerServiceWorker() {
     if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
-    navigator.serviceWorker.register('./sw.js').catch(function () {
-      return null;
-    });
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then(function (registration) {
+        // Ask the browser to re-check sw.js on every load. Otherwise an installed
+        // phone keeps a stale worker until the browser decides to look, which is
+        // why new releases did not reach the mobile client.
+        if (registration && typeof registration.update === 'function') {
+          registration.update().catch(function () {
+            return null;
+          });
+        }
+      })
+      .catch(function () {
+        return null;
+      });
   }
 
   function bindInstallPrompt() {
@@ -376,24 +760,54 @@
     }
     var init = Object.assign({}, options || {});
     init.headers = Object.assign({ Accept: 'application/json' }, (options && options.headers) || {});
+    // multipart/form-data 必须由浏览器自己生成 boundary，手写 Content-Type 会让后端解析失败。
+    var isFormData = typeof FormData === 'function' && init.body instanceof FormData;
+    if (isFormData) {
+      Object.keys(init.headers).forEach(function (name) {
+        if (name.toLowerCase() === 'content-type') delete init.headers[name];
+      });
+    }
+    // 调用方可以传自己的 signal（例如用户取消识别）。这里把它和超时用的
+    // controller 合并：谁先触发都能中止请求，但要能分辨是哪一种——超时和
+    // 用户取消对用户意味着完全不同的事，不能都报成"超时"。
+    var external = opts.signal || init.signal || null;
     var controller = null;
     var timer = null;
-    if (opts.timeoutMs > 0 && typeof AbortController === 'function') {
+    var timedOut = false;
+    if ((external || opts.timeoutMs > 0) && typeof AbortController === 'function') {
       controller = new AbortController();
       init.signal = controller.signal;
-      timer = setTimeout(function () {
-        controller.abort();
-      }, opts.timeoutMs);
+      if (external) {
+        if (external.aborted) {
+          controller.abort();
+        } else if (typeof external.addEventListener === 'function') {
+          external.addEventListener('abort', function () {
+            controller.abort();
+          });
+        }
+      }
+      if (opts.timeoutMs > 0) {
+        timer = setTimeout(function () {
+          timedOut = true;
+          controller.abort();
+        }, opts.timeoutMs);
+      }
     }
     var response = null;
     try {
       response = await fetch(path, init);
     } catch (error) {
       if (controller && controller.signal.aborted) {
-        var timeoutError = new Error('请求超时，请稍后重试。');
-        timeoutError.status = 0;
-        timeoutError.code = 'TIMEOUT';
-        throw timeoutError;
+        if (timedOut) {
+          var timeoutError = new Error('请求超时，请稍后重试。');
+          timeoutError.status = 0;
+          timeoutError.code = 'TIMEOUT';
+          throw timeoutError;
+        }
+        var cancelError = new Error('已取消');
+        cancelError.status = 0;
+        cancelError.code = 'CANCELLED';
+        throw cancelError;
       }
       throw error;
     } finally {
@@ -430,7 +844,11 @@
         rateError.retryAfter = retryAfter;
         throw rateError;
       }
-      throw new Error(extractErrorMessage(data, response.status));
+      var requestError = new Error(extractErrorMessage(data, response.status));
+      requestError.status = response.status;
+      requestError.code = code;
+      requestError.data = data;
+      throw requestError;
     }
     if (data === null) {
       throw new Error('服务返回了无法解析的响应。');
@@ -479,7 +897,9 @@
           lat: state.lat,
           lon: state.lon,
           location_name: state.name
-        })
+        }),
+        {},
+        { timeoutMs: ACTIVITY_TIMEOUT_MS }
       );
       if (seq !== state.seq) return;
       renderActivity(data);
@@ -498,7 +918,9 @@
         lon: state.lon,
         radius_km: state.radiusKm,
         limit: SPOT_FETCH_LIMIT
-      })
+      }),
+      {},
+      { timeoutMs: SPOTS_TIMEOUT_MS }
     );
   }
 
@@ -602,27 +1024,48 @@
     state.spotsHintTimer = setTimeout(function () {
       state.spotsHintTimer = null;
       if (body.getAttribute('aria-busy') !== 'true') return;
+      // 高德账号硬限 2 QPS，每个候选一次路径规划，10 个候选约 10 秒。
       var line = body.querySelector('.placeholder p');
-      if (line) line.textContent = '正在规划车程，真实模式约需 20 秒';
+      if (line) line.textContent = '正在逐个规划车程，真实模式约需 10 秒…';
     }, 3000);
   }
 
-  function renderActivityError(error) {
-    var body = $('activity-body');
+  // 超时和"服务真的挂了"是两回事：超时的请求后端往往还在算。
+  // 混为一谈会让用户以为功能坏了，其实再等一会儿或刷新就有。
+  function isTimeoutError(error) {
+    return !!error && (error.code === 'TIMEOUT' || Number(error.status) === 0);
+  }
+
+  function renderSectionError(body, title, error, timeoutHint) {
     var box = el('div', 'empty');
-    box.append(el('p', null, '鱼情分析暂时不可用'));
-    box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
+    if (isTimeoutError(error)) {
+      box.append(el('p', null, title + '响应较慢'));
+      box.append(el('p', 'hint', timeoutHint));
+      box.append(el('p', 'hint', '再点一次"刷新"通常就能看到结果。'));
+    } else {
+      box.append(el('p', null, title + '暂时不可用'));
+      box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
+    }
     body.replaceChildren(box);
     body.setAttribute('aria-busy', 'false');
   }
 
+  function renderActivityError(error) {
+    renderSectionError(
+      $('activity-body'),
+      '鱼情分析',
+      error,
+      '正在获取实时天气与气压数据，网络较慢时会更久一些。'
+    );
+  }
+
   function renderSpotsError(error) {
-    var body = $('spots-body');
-    var box = el('div', 'empty');
-    box.append(el('p', null, '钓位推荐暂时不可用'));
-    box.append(el('p', 'hint', (error && error.message) || '请稍后重试。'));
-    body.replaceChildren(box);
-    body.setAttribute('aria-busy', 'false');
+    renderSectionError(
+      $('spots-body'),
+      '钓位推荐',
+      error,
+      '要为每个候选钓位规划实时车程，耗时较长属于正常现象。'
+    );
   }
 
   function renderActivity(data) {
@@ -687,7 +1130,11 @@
     var infoGrid = el('div', 'info-grid');
     infoGrid.append(renderWindows(activity.best_windows));
     infoGrid.append(renderTextInfo('建议水深', activity.water_depth || '暂无建议'));
-    infoGrid.append(renderSpecies(activity.suitable_species));
+    // 劝退档不给鱼种：后端此时只会回一个占位值，展示出来会读成"今天适合钓这个"，
+    // 与同一屏的"今天不建议出钓"矛盾——和隐藏水深策略是同一个理由。
+    if (activity.band !== '劝退') {
+      infoGrid.append(renderSpecies(activity.suitable_species));
+    }
     fragment.append(infoGrid);
 
     if (Array.isArray(activity.alerts) && activity.alerts.length) {
@@ -1222,10 +1669,17 @@
       return;
     }
     node.removeAttribute('data-empty');
+    // 同类水域推导出来的结果不是"某条帖子说这里有鱼"，视觉上要能看出来，
+    // 否则用户会以为我们查到了这个湖的实情。
+    var typical = result.source === 'typical';
+    node.setAttribute('data-typical', typical ? 'true' : 'false');
     node.append(el('span', 'spot-species-label', '推荐鱼种：'));
     node.append(document.createTextNode(species.join('、')));
-    var label = result.source_label || '小红书';
-    node.append(el('span', 'spot-species-source', '来源：' + label + ' · 仅供参考'));
+    // Provider-agnostic fallback: the backend decides the source wording.
+    var label = result.source_label || '网络公开信息';
+    node.append(
+      el('span', 'spot-species-source', (typical ? '参考：' : '来源：') + label + ' · 仅供参考')
+    );
   }
 
   function appendChatMessage(role, text, options) {
@@ -1268,14 +1722,367 @@
   }
 
   function updateChatControls() {
-    $('chat-send').disabled = state.chatBusy;
-    $('chat-input').disabled = state.chatBusy;
+    var busy = state.chatBusy || state.identifyBusy;
+    $('chat-send').disabled = busy;
+    $('chat-input').disabled = busy;
+    updateIdentifyControls();
+  }
+
+  function updateIdentifyControls() {
+    // 识别进行中**不**禁用入口。选完一张照片后发现选错了、想重选，是常事；
+    // 把按钮 disabled 掉，用户就只能干等（手机慢网下最长 60 秒）才能再点，
+    // 界面上又没有别的取消入口——这正是"选完照片后回不去选择界面"的原因。
+    // 重新选一张照片本身就是取消上一张，见 cancelIdentifyRun。
+    ['identify-upload-btn', 'identify-camera-btn'].forEach(function (id) {
+      var button = $(id);
+      if (!button) return;
+      button.disabled = state.chatBusy;
+      button.setAttribute('aria-busy', state.identifyBusy ? 'true' : 'false');
+      button.classList.toggle('is-loading', state.identifyBusy);
+    });
+  }
+
+  function isTouchDevice() {
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) {
+      return true;
+    }
+    return Number(navigator.maxTouchPoints) > 0;
+  }
+
+  function identifyErrorMessage(error) {
+    var status = error ? Number(error.status) : 0;
+    // 前端自己的超时（AbortController）不是服务端错误，如实说是超时。
+    if (error && error.code === 'TIMEOUT') {
+      return '图片识别等待超时，服务可能仍在处理。请稍后重试，或换一张更小的照片。';
+    }
+    if (status === 413) {
+      // 413 有两个来源：上传字节数超限（PAYLOAD_TOO_LARGE）和分辨率超限
+      // （IMAGE_TOO_LARGE）。后者服务端会带上具体尺寸和处置建议，直接透传。
+      if (error && error.code === 'IMAGE_TOO_LARGE' && error.message) {
+        return String(error.message);
+      }
+      return IDENTIFY_MAX_BYTES_TEXT;
+    }
+    // 415 有四种来源，处置方式各不相同：格式不支持（换格式）、文件损坏
+    // （重选/重拍）、内容为空（重选）、根本不是图片（选图片）。
+    // 服务端已经按 code 给出具体说明，这里照实透传，不要统一覆盖成
+    // "不支持的图片格式"——那会把"图片损坏"误导成"格式不对"。
+    if (status === 415) {
+      if (error && error.message) return String(error.message);
+      return '不支持的图片格式，请换一张 JPG/PNG/WEBP/GIF/HEIC 图片';
+    }
+    if (status === 429) {
+      return (error && error.message) || rateLimitMessage(error && error.data, error && error.retryAfter);
+    }
+    // 503 既可能是"未配置"，也可能是模型超时/上游故障；后者服务端带了
+    // 具体原因，同样透传，不要一律说成"未配置"。
+    if (status === 503) {
+      return (error && error.message) || '图片识别服务暂时不可用，请稍后重试';
+    }
+    if (error && error.message) return String(error.message);
+    return '图片识别失败，请稍后重试。';
+  }
+
+  function appendUserImageMessage(file, note, onCancel) {
+    var list = $('chat-messages');
+    var wrapper = el('div', 'msg msg-user msg-user-image');
+    var bubble = el('div', 'msg-bubble');
+    var preview = el('div', 'msg-image');
+    var image = el('img', 'msg-thumb');
+    var objectUrl = URL.createObjectURL(file);
+    var released = false;
+
+    function release() {
+      if (released) return;
+      released = true;
+      URL.revokeObjectURL(objectUrl);
+    }
+
+    // 图片在按钮内部，语义由按钮的 aria-label 承担；alt 置空避免读屏
+    // 把"缩略图 + 查看大图"念两遍。
+    image.alt = '';
+    // 缩略图加载完就释放 blob 地址（省内存），所以查看大图时不能复用
+    // 这个地址——viewer.open 会按同一个 File 现造一个新地址。
+    image.addEventListener('load', release);
+    image.addEventListener('error', release);
+    image.src = objectUrl;
+
+    // 缩略图即按钮：原生 button 才能在手机上拿到点击与键盘焦点，
+    // 也让读屏知道"这里可以点开"。图片只 append 一次，进 button 而不是进
+    // .msg-image——同一个节点 append 两次会被移动，留下一个空容器。
+    var openButton = el('button', 'msg-image-open');
+    openButton.type = 'button';
+    openButton.setAttribute('aria-label', '查看照片大图');
+    openButton.append(image);
+    preview.append(openButton);
+    bubble.append(preview);
+    openButton.addEventListener('click', function () {
+      buildImageViewer().open(file, '鱼获照片大图', openButton);
+    });
+
+    var label = el('span', 'msg-image-text', '识别这张图片');
+    bubble.append(label);
+    if (note) bubble.append(el('span', 'msg-image-note', note));
+    // 识别期间给一个就地取消入口：手机上想换一张，不必去找工具栏按钮。
+    var cancel = null;
+    if (typeof onCancel === 'function') {
+      cancel = el('button', 'msg-image-cancel', '取消，重新选择');
+      cancel.type = 'button';
+      cancel.addEventListener('click', function () {
+        onCancel();
+      });
+      bubble.append(cancel);
+    }
+    wrapper.append(bubble);
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return {
+      element: wrapper,
+      release: release,
+      cancel: cancel,
+      // 请求结束后取消已经没有意义，收起来免得误导。
+      finish: function () {
+        if (cancel && cancel.parentNode) cancel.remove();
+      },
+      setLabel: function (text) {
+        label.textContent = text;
+      }
+    };
+  }
+
+  function identifyField(label, value) {
+    var text = value === undefined || value === null ? '' : String(value).trim();
+    if (!text) return null;
+    var row = el('div', 'identify-row');
+    row.append(el('span', 'identify-label', label));
+    row.append(el('p', 'identify-text', text));
+    return row;
+  }
+
+  function identifyBaits(baits) {
+    var items = Array.isArray(baits)
+      ? baits
+          .filter(function (bait) {
+            return typeof bait === 'string' && bait.trim();
+          })
+          .map(function (bait) {
+            return bait.trim();
+          })
+      : [];
+    if (!items.length) return null;
+    var row = el('div', 'identify-row');
+    row.append(el('span', 'identify-label', '钓饵'));
+    var chips = el('div', 'chips');
+    items.forEach(function (bait) {
+      chips.append(el('span', 'chip', bait));
+    });
+    row.append(chips);
+    return row;
+  }
+
+  function renderIdentifyResult(data) {
+    var payload = data && typeof data === 'object' ? data : {};
+    var list = $('chat-messages');
+    var wrapper = el('div', 'msg msg-assistant msg-identify');
+    var bubble = el('div', 'msg-bubble identify-bubble');
+    var identified = payload.identified === true;
+    var species = identified && payload.species ? String(payload.species) : '';
+
+    if (!identified) {
+      bubble.append(el('p', 'identify-empty', '未能识别出鱼的种类'));
+      var message =
+        typeof payload.message === 'string' && payload.message.trim()
+          ? payload.message.trim()
+          : '未能识别出鱼的种类，请换一张更清晰的照片（建议鱼体完整、光线充足）。';
+      bubble.append(el('p', 'identify-hint', message));
+    } else {
+      var head = el('div', 'identify-head');
+      head.append(el('span', 'identify-species', species || '未命名鱼种'));
+      var confidence = payload.confidence ? String(payload.confidence).toLowerCase() : '';
+      if (confidence) {
+        head.append(
+          el(
+            'span',
+            'confidence-badge confidence-' + confidence,
+            CONFIDENCE_LABELS[confidence] || '置信度：' + confidence
+          )
+        );
+      }
+      bubble.append(head);
+      var summary = identifyField('简要知识', payload.summary);
+      if (summary) bubble.append(summary);
+      var habits = identifyField('习性', payload.habits);
+      if (habits) bubble.append(habits);
+      var baits = identifyBaits(payload.baits);
+      if (baits) bubble.append(baits);
+      var tips = identifyField('提示', payload.tips);
+      if (tips) bubble.append(tips);
+      var caveats = identifyField('注意', payload.caveats);
+      if (caveats) bubble.append(caveats);
+      if (payload.in_catalog === false) {
+        bubble.append(
+          el('p', 'identify-catalog-note', '该鱼种未在我们的常见列表中，信息仅供参考')
+        );
+      }
+    }
+
+    if (payload.ai_disclosure) {
+      bubble.append(el('p', 'identify-disclosure', String(payload.ai_disclosure)));
+    }
+    wrapper.append(bubble);
+
+    var meta = el('div', 'msg-meta');
+    meta.append(el('span', 'mini-badge', 'AI 生成 · 仅供参考'));
+    if (payload.mode === 'mock') meta.append(el('span', 'mini-badge mini-badge-soft', 'Mock 演示'));
+    if (payload.mode === 'llm') meta.append(el('span', 'mini-badge mini-badge-soft', '图像识别'));
+    wrapper.append(meta);
+
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return wrapper;
+  }
+
+  function appendIdentifyError(message) {
+    var wrapper = el('div', 'msg msg-assistant msg-identify');
+    var bubble = el('div', 'msg-bubble identify-bubble');
+    bubble.append(el('p', 'identify-empty', '图片识别失败'));
+    bubble.append(el('p', 'identify-hint', message));
+    wrapper.append(bubble);
+    var meta = el('div', 'msg-meta');
+    meta.append(el('span', 'mini-badge mini-badge-error', '服务提示'));
+    wrapper.append(meta);
+    var list = $('chat-messages');
+    list.append(wrapper);
+    list.scrollTop = list.scrollHeight;
+    return wrapper;
+  }
+
+  // 取消当前识别：中止在途请求，并把已经发出的气泡标成"已取消"。
+  // 用户重新选一张照片时也会走这里，所以"重选"天然就是"取消"。
+  function cancelIdentifyRun() {
+    var run = state.identifyRun;
+    if (!run || run.settled) return;
+    run.cancelled = true;
+    if (typeof run.controller === 'object' && run.controller) {
+      run.controller.abort();
+    }
+  }
+
+  async function handleIdentifyFile(file) {
+    if (!file || state.chatBusy) return;
+    // 部分 iOS 场景下 file.type 为空串（尤其从「文件」App 选取的 HEIC）。
+    // 空类型交给服务端按真实解码判断，不要在前端就把合法图片挡掉。
+    var mime = typeof file.type === 'string' ? file.type : '';
+    var isImage = mime === '' || mime.indexOf('image/') === 0;
+    if (!isImage) {
+      var formatMessage = '请选择图片文件（支持 JPG/PNG 等常见图片格式）。';
+      appendIdentifyError(formatMessage);
+      setStatus(formatMessage, 'error');
+      return;
+    }
+    if (Number(file.size) > IDENTIFY_MAX_BYTES) {
+      appendIdentifyError(IDENTIFY_MAX_BYTES_TEXT);
+      setStatus(IDENTIFY_MAX_BYTES_TEXT, 'error');
+      return;
+    }
+
+    // 上一张还在识别中：先取消它，再用新选的这张开始。
+    cancelIdentifyRun();
+
+    var input = $('chat-input');
+    var note = String(input.value || '').trim().slice(0, IDENTIFY_MAX_NOTE);
+
+    var controller = typeof AbortController === 'function' ? new AbortController() : null;
+    var run = { controller: controller, cancelled: false, settled: false };
+    state.identifyRun = run;
+
+    state.identifyBusy = true;
+    updateChatControls();
+    var preview = appendUserImageMessage(file, note, function () {
+      cancelIdentifyRun();
+    });
+    var typing = appendTyping();
+    if (note) input.value = '';
+
+    try {
+      var form = new FormData();
+      form.append('image', file, file.name || 'fish.jpg');
+      if (note) form.append('note', note);
+      var data = await requestJSON(
+        '/api/agent/identify-fish',
+        { method: 'POST', body: form, signal: controller ? controller.signal : undefined },
+        { timeoutMs: IDENTIFY_TIMEOUT_MS, signal: controller ? controller.signal : undefined }
+      );
+      if (run.cancelled) return;
+      typing.remove();
+      renderIdentifyResult(data);
+    } catch (error) {
+      if (run.cancelled) {
+        // 用户主动取消不是错误，不要把中止报成"识别失败"。
+        typing.remove();
+        preview.setLabel('已取消，可重新选择照片');
+        // 若用户已经选了新的一张，状态栏归新请求管，别再覆盖它的提示。
+        if (state.identifyRun === run) setStatus('已取消这次识别。');
+        return;
+      }
+      typing.remove();
+      var errorText = identifyErrorMessage(error);
+      appendIdentifyError(errorText);
+      setStatus('图片识别失败：' + errorText, 'error');
+    } finally {
+      run.settled = true;
+      preview.finish();
+      preview.release();
+      // 只有仍是"当前这次"时才能收尾全局状态：被新照片取代的那次运行
+      // 结束得比新运行晚，若无条件清除会把新运行的 busy 状态误清掉。
+      if (state.identifyRun === run) {
+        state.identifyRun = null;
+        state.identifyBusy = false;
+        updateChatControls();
+      }
+    }
+  }
+
+  function bindIdentifyEvents() {
+    var uploadButton = $('identify-upload-btn');
+    var uploadInput = $('identify-upload-input');
+    var cameraButton = $('identify-camera-btn');
+    var cameraInput = $('identify-camera-input');
+
+    // 拍照入口只在触摸设备出现（(pointer: coarse) 或无精确指针的触屏设备）。
+    if (cameraButton) cameraButton.hidden = !isTouchDevice();
+
+    function handleChange(input, event) {
+      var target = event.target;
+      var file = target && target.files && target.files[0] ? target.files[0] : null;
+      // 清空以便重复选择同一张图片时仍能触发 change。
+      if (target) target.value = '';
+      if (file) handleIdentifyFile(file);
+      if (input) input.blur();
+    }
+
+    if (uploadButton && uploadInput) {
+      uploadButton.addEventListener('click', function () {
+        uploadInput.click();
+      });
+      uploadInput.addEventListener('change', function (event) {
+        handleChange(uploadInput, event);
+      });
+    }
+    if (cameraButton && cameraInput) {
+      cameraButton.addEventListener('click', function () {
+        cameraInput.click();
+      });
+      cameraInput.addEventListener('change', function (event) {
+        handleChange(cameraInput, event);
+      });
+    }
   }
 
   async function sendMessage(rawText) {
     var input = $('chat-input');
     var message = String(rawText !== undefined && rawText !== null ? rawText : input.value).trim();
-    if (!message || state.chatBusy) return;
+    if (!message || state.chatBusy || state.identifyBusy) return;
     if (message.length > 500) {
       setStatus('问题请控制在 500 字以内。', 'error');
       return;
@@ -1423,6 +2230,7 @@
         sendMessage(button.getAttribute('data-question'));
       });
     });
+    bindIdentifyEvents();
   }
 
   function mockRequest(path, options) {
@@ -1454,7 +2262,28 @@
       }
       return Promise.resolve(makeMockChat(payload.message || ''));
     }
+    if (url.pathname === '/api/agent/identify-fish') {
+      return Promise.resolve(makeMockIdentify());
+    }
     return Promise.reject(new Error('Mock 未实现接口：' + url.pathname));
+  }
+
+  function makeMockIdentify() {
+    return {
+      identified: true,
+      species: '鲫鱼',
+      raw_species: '鲫鱼',
+      in_catalog: true,
+      confidence: 'high',
+      summary: '鲫鱼是常见的淡水底层鱼，适应力强，全年可钓，是野钓最常见的目标鱼。',
+      habits: '喜栖水底，偏爱安静、有水草或缓流的环境，清晨与傍晚觅食更积极。',
+      baits: ['蚯蚓', '红虫', '商品饵（腥香）', '玉米粒'],
+      tips: '钓底为主，注意避开高温正午，可先钓 1.5–2m 浅滩。',
+      caveats: '仅根据单张照片判断，角度与光线可能影响结果。',
+      mode: 'mock',
+      ai_disclosure: DISCLOSURE,
+      generated_at: new Date().toISOString()
+    };
   }
 
   function makeMockFishActivity() {
@@ -1528,8 +2357,8 @@
         { start: '05:30', end: '08:00', label: '日出窗口' },
         { start: '16:30', end: '18:30', label: '日落窗口' }
       ],
-      water_depth: '先钓 1.5–2m 浅滩，无口则转 3m 以上',
-      suitable_species: ['鲫鱼', '鲤鱼'],
+      water_depth: '先钓 2–2.5m 滩口，无口再试 2.5–3m 斜坡（有风增氧可钓浅）',
+      suitable_species: ['鲫鱼', '鲤鱼', '草鱼'],
       alerts: [
         {
           code: 'DATA_FALLBACK',

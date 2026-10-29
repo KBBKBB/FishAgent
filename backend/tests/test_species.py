@@ -21,6 +21,8 @@ from fishagent.services.species import (
     EMPTY_NOTE,
     FOUND_NOTE,
     SOURCE_DISCLOSURE,
+    TYPICAL_NOTE,
+    TYPICAL_SOURCE_LABEL,
     reset_species_cache,
 )
 
@@ -80,13 +82,18 @@ def test_batch_contract_and_input_order(client):
         assert set(item) == RESULT_KEYS
         assert isinstance(item["has_recommendation"], bool)
         assert isinstance(item["species"], list)
-        assert item["source"] in ("xiaohongshu", "none")
+        assert item["source"] in ("xiaohongshu", "typical", "none")
         assert set(item["species"]) <= set(KNOWN_SPECIES)
-        if item["has_recommendation"]:
+        if item["has_recommendation"] and item["source"] == "xiaohongshu":
             assert item["species"]
-            assert item["source"] == "xiaohongshu"
             assert item["source_label"]
             assert item["note"] == FOUND_NOTE
+        elif item["has_recommendation"]:
+            # 同水域类型的参考值：不是引用来源，文案必须说清楚。
+            assert item["source"] == "typical"
+            assert item["species"]
+            assert item["source_label"] == TYPICAL_SOURCE_LABEL
+            assert item["note"] == TYPICAL_NOTE
         else:
             assert item["species"] == []
             assert item["source"] == "none"
@@ -720,3 +727,546 @@ async def test_mock_provider_is_deterministic_bounded_and_samples_empty():
         assert len(set(row)) == len(row), "Mock 行内鱼种不得重复"
         if row:
             assert 1 <= len(row) <= 3
+
+
+def _bing_html(snippets):
+    """Build a minimal Bing SERP with one result block per (title, snippet)."""
+    blocks = "".join(
+        f'<li class="b_algo"><h2><a href="https://example.com/{i}">{title}</a></h2><p>{snippet}</p></li>'
+        for i, (title, snippet) in enumerate(snippets)
+    )
+    return f"<html><body><ol>{blocks}</ol></body></html>"
+
+
+def test_bing_provider_matches_species_from_snippets():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    snippets = [
+        ("千岛湖钓鱼攻略", "本水域盛产鲢鳙、鲫鱼和鲤鱼，野钓效果不错"),
+        ("千岛湖鱼情", "主钓翘嘴与马口，偶尔上鲤鱼"),
+    ]
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    raw = provider._match_species(provider._extract_snippets(_bing_html(snippets)))
+
+    # Aliases and canonical names both resolve through normalize_species.
+    from fishagent.core.species import normalize_species
+
+    # limit=10 here: the default cap of 4 belongs to the API layer, and this
+    # test checks the matcher, not the truncation.
+    result = normalize_species(raw, limit=10)
+    assert set(result) <= set(KNOWN_SPECIES)
+    assert "鲢鳙" in result and "鲫鱼" in result and "鲤鱼" in result
+    assert "翘嘴" in result and "马口" in result
+    assert len(result) == len(set(result))
+
+
+def test_bing_provider_returns_empty_when_no_species_mentioned():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+    html = _bing_html([("青山小说", "一部修仙小说，与钓鱼无关")])
+    assert provider._match_species(provider._extract_snippets(html)) == []
+
+
+def test_bing_provider_uses_http_client(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    captured = {"url": None}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            text=_bing_html(
+                [("千岛湖钓鱼", "这里鲫鱼、鲤鱼很多，偶尔能钓到鲢鳙")]
+            ),
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    # Inject the mock transport by creating the client ourselves and calling
+    # the private lookup so the test does not hit the real network.
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="千岛湖"))
+
+    result = asyncio.run(run())
+    assert captured["url"].startswith("https://cn.bing.com/search?q=")
+    # The query is percent-encoded on the wire.
+    assert "%E5%8D%83%E5%B2%9B%E6%B9%96" in captured["url"]  # 千岛湖
+    assert set(result) <= set(KNOWN_SPECIES)
+    assert {"鲫鱼", "鲤鱼", "鲢鳙"} <= set(result)
+
+
+def test_bing_provider_returns_empty_on_captcha(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>百度安全验证 wappass.baidu.com</html>")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_returns_empty_on_non_200(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_returns_empty_on_network_error(monkeypatch):
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("simulated network failure")
+
+    transport = httpx.MockTransport(handler)
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    async def run():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await provider._lookup_one(client, SpotSpeciesQuery(name="任何水域"))
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_skips_blank_name():
+    import httpx
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider(timeout_seconds=5.0)
+
+    # SpotSpeciesQuery rejects a blank name, so build a stand-in that only
+    # exposes the field the provider reads.
+    blank = SimpleNamespace(name="   ")
+
+    async def run():
+        async with httpx.AsyncClient() as client:
+            return await provider._lookup_one(client, blank)
+
+    assert asyncio.run(run()) == []
+
+
+def test_bing_provider_respects_max_results():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    snippets = [("水域", "鲫鱼")] * 20
+    provider = BingSpeciesProvider(timeout_seconds=5.0, max_results=3)
+    snippets_out = provider._extract_snippets(_bing_html(snippets))
+    # 2 texts per block (title + snippet), 3 blocks max -> 6 texts.
+    assert len(snippets_out) == 6
+
+
+def test_bing_provider_declares_its_own_disclosure():
+    """The Bing adapter must not reuse Xiaohongshu wording in its response."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    assert provider.source_key == "bing"
+    assert "Bing" in provider.source_label
+    assert "小红书" not in provider.found_note
+    assert "小红书" not in provider.source_disclosure
+    assert "仅供参考" in provider.found_note
+    assert "仅供参考" in provider.source_disclosure
+
+
+def test_service_uses_provider_specific_source_metadata(client, override_provider):
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+
+    async def fake_find_species(spots):
+        return [["鲫鱼"] for _ in spots]
+
+    provider.find_species = fake_find_species  # type: ignore[method-assign]
+    override_provider(provider)
+
+    payload = request_species(client, [{"spot_id": "p1", "name": "千岛湖"}]).json()
+    item = payload["results"][0]
+
+    assert item["source"] == "bing"
+    assert item["source_label"] == provider.source_label
+    assert item["note"] == provider.found_note
+    assert payload["source_disclosure"] == provider.source_disclosure
+    assert payload["provider"] == "bing"
+
+
+def test_species_provider_selection_includes_bing():
+    import fishagent.deps as deps_mod
+    from fishagent.config import Settings
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    original = deps_mod.get_settings
+    settings = Settings(species_provider="bing", mock_mode=False)
+    try:
+        deps_mod.get_settings = lambda: settings
+        provider = deps_mod.get_species_provider()
+        assert isinstance(provider, BingSpeciesProvider)
+    finally:
+        deps_mod.get_settings = original
+
+
+# --- 同一水域类型的参考值（无引用来源时的保底）-------------------------------
+
+
+class _EmptyAnswerProvider:
+    """Looks up, finds nothing: this is "not found", unlike the null provider."""
+
+    name = "bing"
+    source_key = "bing"
+    source_label = "Bing 搜索"
+    found_note = "来自 Bing 搜索结果，仅供参考"
+    source_disclosure = "鱼种信息来自公开搜索结果，仅供参考。"
+    resolves_empty = True
+
+    async def find_species(self, spots):
+        return [[] for _ in spots]
+
+
+def test_empty_lookup_falls_back_to_the_water_type(client, override_provider):
+    """A real lookup that found nothing still gives the user something usable."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某个没查到的水库", "water_type": "水库"}]
+    ).json()
+    item = payload["results"][0]
+
+    assert item["species"], "should offer the water-type species"
+    assert item["has_recommendation"] is True
+    assert item["source"] == "typical"
+    assert item["source_label"] == TYPICAL_SOURCE_LABEL
+    assert item["note"] == TYPICAL_NOTE
+    assert set(item["species"]) <= set(KNOWN_SPECIES)
+
+
+def test_typical_value_is_labelled_as_not_about_this_lake(client, override_provider):
+    """The wording must not let a water-type guess pass as a report."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+    note = payload["results"][0]["note"]
+
+    assert "未查到该水域" in note
+    assert "同类水域" in note
+    # Never claim it is a community or search report.
+    assert "网友" not in note
+    assert "搜索" not in note
+
+
+def test_disabled_provider_does_not_invent_species(client, override_provider):
+    """NullSpeciesProvider means "switched off", not "nothing found".
+
+    Regression: without this distinction every spot whose species lookup was
+    disabled would show a plausible-looking list, claiming knowledge the
+    deployment deliberately does not have.
+    """
+    override_provider(NullSpeciesProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+    item = payload["results"][0]
+
+    assert item["species"] == []
+    assert item["has_recommendation"] is False
+    assert item["source"] == "none"
+    assert item["note"] == EMPTY_NOTE
+
+
+def test_degraded_response_does_not_fall_back(client, override_provider):
+    """Degraded means the source failed; a fallback would imply we had checked."""
+
+    class _Boom:
+        name = "bing"
+        source_label = "Bing 搜索"
+        resolves_empty = True
+
+        async def find_species(self, spots):
+            raise RuntimeError("upstream down")
+
+    override_provider(_Boom())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+
+    assert payload["degraded"] is True
+    assert payload["results"][0]["species"] == []
+    assert payload["results"][0]["source"] == "none"
+
+
+def test_unknown_water_type_gets_no_fallback(client, override_provider):
+    """Guessing for an unlabelled water body would be worse than saying nothing."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某处", "water_type": ""}]
+    ).json()
+    item = payload["results"][0]
+    assert item["species"] == []
+    assert item["source"] == "none"
+
+
+@pytest.mark.parametrize(
+    ("water_type", "expected"),
+    [
+        ("水库", "鲢鳙"),
+        ("天然湖泊", "草鱼"),
+        ("小型野塘", "黑鱼"),
+        ("河流", "白条"),
+        ("", None),
+        ("冰面", None),
+    ],
+)
+def test_typical_species_by_water_type(water_type, expected):
+    from fishagent.core.species import typical_species_for
+
+    result = typical_species_for(water_type)
+    if expected is None:
+        assert result == []
+    else:
+        assert expected in result
+        assert len(result) == 4
+
+
+# --- Bing 查询式与退化检测 ---------------------------------------------------
+
+
+def test_bing_queries_the_place_name_alone():
+    """Regression: "{name} 钓鱼" put every query on Bing's broken path.
+
+    Measured 2026-10-29: appending any second Chinese term makes cn.bing answer
+    with a single-character dictionary entry (三 sān 是汉语通用汉字) instead of
+    the lake. The bare name returns the actual water body.
+    """
+    from fishagent.providers.species_bing import _QUERY_TEMPLATE
+
+    assert "钓鱼" not in _QUERY_TEMPLATE
+    assert "{" not in _QUERY_TEMPLATE.replace("{name}", "", 1)
+    assert _QUERY_TEMPLATE.format(name="三岔湖") == "三岔湖"
+
+
+def _headline_page(headlines):
+    return "".join(f"<h2><a>{text}</a></h2>" for text in headlines)
+
+
+def test_dictionary_fallback_page_is_detected():
+    """The dictionary SERP must be recognised so the log says what happened."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    degraded = [
+        "三（汉语汉字）_百度百科",
+        "3（阿拉伯数字之一）_百度百科",
+        "三 sān - 汉典",
+        "三 的意思, 三 的解释 -汉语国学",
+        "三 -字典-意思-解释-拼音",
+        "三 怎么读_ 三 的拼音 - 新华字典",
+        "三 - 维基词典，自由的多语言词典",
+        "成都天气_天气预报",
+        "三岔湖门票_携程",
+        "成都旅游攻略",
+    ]
+    assert provider._looks_degraded(provider._extract_headlines(_headline_page(degraded)))
+
+
+def test_healthy_results_are_not_flagged_as_degraded():
+    """A real result set must never be mistaken for the fallback page."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    healthy = [
+        "三岔湖 景区_百度百科",
+        "资阳 三岔湖 景区_百度百科",
+        "三岔湖 - 天府明珠 生态仙境",
+        "三岔湖钓鱼攻略 - 简书",
+        "成都三岔湖钓鱼，一钓就上瘾 - 哔哩哔哩",
+        "简阳三岔湖钓鱼攻略及须知 - 成都本地宝",
+        "请教三岔湖钓鱼位置 - 百度贴吧",
+        "三岔湖水库鱼情 - 钓鱼之家",
+        "四川三岔湖旅游攻略",
+        "三岔湖环湖绿道",
+    ]
+    assert not provider._looks_degraded(provider._extract_headlines(_headline_page(healthy)))
+
+
+def test_degraded_serp_yields_no_species_instead_of_noise():
+    """End to end: a dictionary page must not be mined for species."""
+
+    class _Reply:
+        status_code = 200
+        text = _headline_page(
+            [
+                "三（汉语汉字）_百度百科",
+                "3（阿拉伯数字之一）_百度百科",
+                "三 sān - 汉典",
+                "三 -字典-意思-解释-拼音",
+            ]
+        )
+        encoding = "utf-8"
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+
+    class _Client:
+        async def get(self, url):
+            return _Reply()
+
+    found = asyncio.run(provider._search(_Client(), SpotSpeciesQuery(name="三岔湖")))
+    assert found == ([], [])
+
+
+# --- Phase 2 must fit inside the request budget -----------------------------
+#
+# Measured 2026-10-29 on the real serp: a single tieba.baidu.com page kept the
+# page-fetch stage open for 10.9s against a 4s provider budget. The stage had no
+# deadline of its own, only the per-request client timeout, so it outlived the
+# caller's ``wait_for``; the cancellation then threw away the whole batch,
+# including snippet hits that had already been found. From the phone that looked
+# like "请求超时", while the server actually answered 200 with every spot empty.
+
+
+def _deadline_provider(**kwargs):
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    return BingSpeciesProvider(timeout_seconds=0.5, **kwargs)
+
+
+def test_page_fetch_cannot_outlive_the_deadline(monkeypatch):
+    """A hung page yields the snippet hits instead of cancelling the batch."""
+    from fishagent.providers import species_bing
+
+    async def hang(self, client, urls):
+        await asyncio.sleep(60)
+        return []
+
+    monkeypatch.setattr(species_bing.BingSpeciesProvider, "_fetch_pages", hang)
+    provider = _deadline_provider()
+
+    class _Client:
+        pass
+
+    started = time.monotonic()
+    result, fetches, calls = asyncio.run(
+        provider._deepen(
+            _Client(),
+            ["鲫鱼"],
+            ["https://example.com/a"],
+            fetch_budget=3,
+            llm_budget=0,
+            deadline=time.monotonic() + 0.3,
+        )
+    )
+    elapsed = time.monotonic() - started
+    # The snippet hit survives; the stage does not run to the client timeout.
+    assert result == ["鲫鱼"]
+    assert calls == 0
+    assert elapsed < 2.0, f"page fetch ignored the deadline ({elapsed:.2f}s)"
+
+
+def test_deadline_already_passed_skips_fetching_entirely():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    called = {"n": 0}
+
+    async def should_not_run(self, client, urls):
+        called["n"] += 1
+        return []
+
+    from fishagent.providers import species_bing
+
+    original = species_bing.BingSpeciesProvider._fetch_pages
+    species_bing.BingSpeciesProvider._fetch_pages = should_not_run
+    try:
+        provider = BingSpeciesProvider()
+        result, fetches, _ = asyncio.run(
+            provider._deepen(
+                object(),
+                ["鲤鱼"],
+                ["https://example.com/a"],
+                fetch_budget=3,
+                llm_budget=0,
+                deadline=time.monotonic() - 1,
+            )
+        )
+    finally:
+        species_bing.BingSpeciesProvider._fetch_pages = original
+    assert called["n"] == 0
+    assert result == ["鲤鱼"]
+    assert fetches == 0
+
+
+def test_a_hung_page_cannot_make_the_whole_batch_time_out():
+    """End to end: the batch finishes inside its own budget, not the caller's.
+
+    This is the shape that reached the phones: the serp was fine, one result
+    page hung, and the batch ran past the provider budget until the caller's
+    ``wait_for`` cancelled it. The spot's snippet hits were already resolved by
+    then, so the user lost a result we actually had.
+    """
+    from fishagent.providers import species_bing
+
+    async def hang(self, client, urls):
+        await asyncio.sleep(60)
+        return []
+
+    provider = species_bing.BingSpeciesProvider(
+        timeout_seconds=0.6, extractor=None, enable_page_fetch=True
+    )
+
+    class _Client:
+        pass
+
+    original = species_bing.BingSpeciesProvider._fetch_pages
+    species_bing.BingSpeciesProvider._fetch_pages = hang
+
+    async def batch():
+        started = time.monotonic()
+        deepened = await asyncio.gather(
+            *(
+                provider._deepen(
+                    _Client(),
+                    ["鲫鱼"],
+                    ["https://example.com/hung"],
+                    fetch_budget=3,
+                    llm_budget=0,
+                    deadline=started + 0.3,
+                )
+                for _ in range(4)
+            )
+        )
+        return deepened, time.monotonic() - started
+
+    try:
+        deepened, elapsed = asyncio.run(asyncio.wait_for(batch(), timeout=30))
+    finally:
+        species_bing.BingSpeciesProvider._fetch_pages = original
+
+    assert [species for species, _, _ in deepened] == [["鲫鱼"]] * 4
+    assert elapsed < 2.0, f"a hung page held the batch for {elapsed:.2f}s"

@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -41,6 +44,68 @@ _DEFAULT_FISH_BAND = "一般"
 _MAX_EVALUATED_CANDIDATES = 30
 _MIN_EVALUATION_BATCH = 10
 _BATCH_SCREEN_LIMIT = 100
+
+# A full recommendation costs ~60 AMap drive calls (two per evaluated spot), so
+# it takes 13-15 s cold. The page requests it on every load, which meant every
+# visitor paid that. Cached by (rounded location, radius, limit, species, offset)
+# with a short TTL: drive times are traffic estimates, so they go stale quickly,
+# but a few minutes is well inside the noise of an estimate that already
+# assumes baseline traffic.
+_CACHE_TTL_SECONDS = 180
+_MAX_CACHE_ENTRIES = 256
+_spot_cache: OrderedDict[tuple, "_SpotCacheEntry"] = OrderedDict()
+_spot_cache_lock = threading.Lock()
+
+
+class _SpotCacheEntry:
+    __slots__ = ("response", "expires_at")
+
+    def __init__(self, response: SpotRecommendationResponse, expires_at: float) -> None:
+        self.response = response
+        self.expires_at = expires_at
+
+
+def reset_spot_cache() -> None:
+    """Test/ops hook: drop cached spot recommendations."""
+    with _spot_cache_lock:
+        _spot_cache.clear()
+
+
+def _spot_cache_key(
+    *, lat: float, lon: float, radius_km: float, limit: int, species: str | None, offset: int
+) -> tuple:
+    # Coordinates are rounded to ~100 m so trivial GPS jitter still hits the
+    # cache; anything finer would produce a new key per request and never hit.
+    return (
+        round(lat, 3),
+        round(lon, 3),
+        round(float(radius_km), 2),
+        int(limit),
+        species or "",
+        int(offset),
+    )
+
+
+def _read_spot_cache(key: tuple, now: float) -> SpotRecommendationResponse | None:
+    with _spot_cache_lock:
+        entry = _spot_cache.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= now:
+            _spot_cache.pop(key, None)
+            return None
+        _spot_cache.move_to_end(key)  # LRU: keep recently used entries
+        return entry.response
+
+
+def _write_spot_cache(key: tuple, response: SpotRecommendationResponse, now: float) -> None:
+    if _CACHE_TTL_SECONDS <= 0:
+        return
+    with _spot_cache_lock:
+        _spot_cache[key] = _SpotCacheEntry(response, now + _CACHE_TTL_SECONDS)
+        _spot_cache.move_to_end(key)
+        while len(_spot_cache) > _MAX_CACHE_ENTRIES:
+            _spot_cache.popitem(last=False)
 
 
 def _grid_centers(origin: LatLon, radius_m: float) -> list[LatLon]:
@@ -273,23 +338,34 @@ async def _evaluate_candidate(
 ) -> SpotOut | str:
     entry = candidate.entry_location_gcj02 or candidate.location_gcj02
 
-    async def fetch(direction: str) -> int:
+    # The live AMap provider ignores ``direction``: out and back issue identical
+    # requests to the same origin/destination, so asking twice doubled both the
+    # quota cost and — at the account's hard 2 QPS ceiling — the latency, for
+    # nothing. Providers whose result actually depends on ``direction`` (the
+    # mock does) opt out by setting ``direction_affects_result = True``;
+    # ``getattr`` keeps lightweight test doubles working unchanged.
+    if getattr(provider, "direction_affects_result", False):
+        directions = ("out", "back")
+    else:
+        directions = ("out",)
+    results = []
+    for direction in directions:
         async with semaphore:
-            return await _drive_seconds(
-                provider, origin, entry, departure, direction, candidate.id
-            )
-
-    results = await asyncio.gather(fetch("out"), fetch("back"), return_exceptions=True)
-    for result in results:
-        # Quota exhaustion must abort the request as 429, not look like a
-        # single unavailable candidate.
-        if isinstance(result, UpstreamQuotaExceeded):
-            raise result
-    errors = [result for result in results if isinstance(result, BaseException)]
-    if errors:
-        logger.warning("drive estimate failed for %s: %s", candidate.id, errors[0])
-        return "unavailable"
-    out_seconds, back_seconds = results
+            try:
+                results.append(
+                    await _drive_seconds(
+                        provider, origin, entry, departure, direction, candidate.id
+                    )
+                )
+            except UpstreamQuotaExceeded:
+                # Quota exhaustion must abort the request as 429, not look like
+                # a single unavailable candidate.
+                raise
+            except Exception as exc:  # noqa: BLE001 - one spot must not sink the batch
+                logger.warning("drive estimate failed for %s: %s", candidate.id, exc)
+                return "unavailable"
+    out_seconds = results[0]
+    back_seconds = results[-1]
     if out_seconds <= 0 or back_seconds <= 0:
         return "over_two_hours"
     if out_seconds + back_seconds > ROUND_TRIP_LIMIT_SECONDS:
@@ -316,6 +392,19 @@ async def build_spot_recommendations(
     offset: int = 0,
 ) -> SpotRecommendationResponse:
     normalized_species = validate_species(species)
+    cache_key = _spot_cache_key(
+        lat=lat,
+        lon=lon,
+        radius_km=radius_km,
+        limit=limit,
+        species=normalized_species,
+        offset=offset,
+    )
+    cached = _read_spot_cache(cache_key, time.monotonic())
+    if cached is not None:
+        logger.info("spot recommendation cache hit (%.0f ms budget)", _CACHE_TTL_SECONDS * 1000)
+        return cached
+
     origin = LatLon(lat=lat, lon=lon)
     origin_gcj_coord = wgs84_to_gcj02(lat, lon)
     origin_gcj = LatLon(lat=origin_gcj_coord.lat, lon=origin_gcj_coord.lon)
@@ -381,7 +470,7 @@ async def build_spot_recommendations(
     eligible.sort(key=lambda spot: (-spot.total_score, spot.drive_seconds_round_trip, spot.id))
     returned = eligible[offset : offset + limit]
 
-    return SpotRecommendationResponse(
+    response = SpotRecommendationResponse(
         user_location=UserLocationOut(
             wgs84=origin,
             gcj02=LatLon(lat=origin_gcj_coord.lat, lon=origin_gcj_coord.lon),
@@ -406,3 +495,5 @@ async def build_spot_recommendations(
             generated_at=utc_timestamp(),
         ),
     )
+    _write_spot_cache(cache_key, response, time.monotonic())
+    return response

@@ -13,6 +13,10 @@ from fishagent.schemas import SpotSpeciesQuery
 class NullSpeciesProvider:
     name = "none"
     source_label = ""
+    # This provider never looked anything up, so an empty result from it says
+    # nothing about the water body. Deriving a water-type fallback here would
+    # invent a recommendation for a feature that is deliberately switched off.
+    resolves_empty = False
 
     async def find_species(
         self,

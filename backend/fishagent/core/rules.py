@@ -6,6 +6,7 @@ produce the same result, which keeps the HTTP layer and tests deterministic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -334,24 +335,261 @@ def _best_windows(band: str, weather: WeatherSnapshot) -> list[BestWindow]:
     return [sunrise, _sunset_window(weather)]
 
 
-def _suitable_species(temperature: float, species: str | None) -> list[str]:
-    if temperature >= 25:
-        base = ["草鱼", "鲢鳙"]
-    elif temperature >= 15:
-        base = ["鲫鱼", "鲤鱼"]
+def _suitable_species(
+    weather: WeatherSnapshot,
+    local_now: datetime,
+    species: str | None,
+    *,
+    band: str | None = None,
+) -> list[str]:
+    """Species that fit the weather, ranked.
+
+    Previously this read the temperature alone, which drifted out of step with
+    the depth advice as soon as that started using the other factors: the card
+    could say "钓 4–5m 深水" while still recommending warm-water 草鱼/鲢鳙. Both
+    now read the same ``_depth_plan``, so the two lines agree by construction.
+
+    A requested ``species`` is always kept first — the contract requires that a
+    valid request for a species is reflected in the answer. It is not removed
+    for disagreeing with the weather: the user asked about *their* target, and
+    silently dropping it would answer a different question.
+    """
+    if band == "劝退":
+        # The contract requires this list to be non-empty in every band, so it
+        # cannot be []. On a day we advise against going there is no honest
+        # "suitable" species, so the value is a placeholder and the UI hides the
+        # line (same rule as water_depth). Keeping it non-empty matters for API
+        # consumers that would treat [] as "no data" rather than "do not go".
+        requested = [species] if species in ALLOWED_SPECIES else []
+        return requested or ["鲫鱼"]
+
+    plan = _depth_plan(weather, local_now)
+    # Warm, well-oxygenated water and a shallow start favour the active feeders.
+    # Deep cold water favours the bottom-dwelling 鲫鱼/鲤鱼.
+    if plan.index <= 2 and weather.temperature >= 22:
+        base = ["草鱼", "鲢鳙", "鲤鱼"]
+    elif plan.index <= 3 and weather.temperature >= 15:
+        base = ["鲫鱼", "鲤鱼", "草鱼"]
     else:
-        base = ["鲫鱼"]
+        base = ["鲫鱼", "鲤鱼"]
     if species and species in ALLOWED_SPECIES:
         return [species] + [item for item in base if item != species]
     return base
 
 
-def _water_depth(temperature: float) -> str:
+@dataclass(frozen=True)
+class _DepthPlan:
+    """Where the advice points and why; the single source both lines read."""
+
+    index: int
+    modifiers: list[tuple[int, str]]
+    shift: int
+
+
+def _depth_plan(weather: WeatherSnapshot, local_now: datetime) -> _DepthPlan:
+    """Resolve the starting rung and the modifiers that produced it."""
+    modifiers = _depth_modifiers(weather, local_now)
+    shift = max(
+        -_MAX_DEPTH_SHIFT,
+        min(_MAX_DEPTH_SHIFT, sum(delta for delta, _ in modifiers)),
+    )
+    index = _depth_base_index(weather.temperature) + shift
+    index = max(0, min(len(_DEPTH_LADDER) - 1, index))
+    return _DepthPlan(index=index, modifiers=modifiers, shift=shift)
+
+
+def _water_depth(
+    weather: WeatherSnapshot,
+    local_now: datetime,
+    *,
+    band: str | None = None,
+) -> str:
+    """Depth strategy from the factors the engine already scored.
+
+    Previously this read the temperature alone, so every request between 5 and
+    32 degC got the identical sentence and the card carried no information. It
+    now starts from a temperature-implied layer and lets the same factors F3/F5/
+    F7 (and the pressure pair behind F1/F2) move it, so the advice actually
+    changes with the weather the user is being shown.
+
+    The advice is always "start at the predicted layer, then try a neighbouring
+    one": the prediction is a guess, and the honest shape of a guess is a range
+    plus a fallback, not a single number presented as fact.
+
+    ``band`` suppresses the advice entirely on 劝退. Handing someone a water
+    layer to fish when the same screen says "do not go today" is worse than
+    saying nothing — and the derived cause can flatly contradict the forced
+    alert (a thunderstorm day read as "气压缓降鱼活跃上浮").
+    """
+    if band == "劝退":
+        return "今日不建议出钓，无水深策略"
+    plan = _depth_plan(weather, local_now)
+
+    primary = _DEPTH_LADDER[plan.index]
+    # Warm water: start shallow and move deeper. Cold water: the shallows warm
+    # first, so the fallback goes the other way.
+    step = _DEPTH_FALLBACK_STEP if plan.index <= 2 else -_DEPTH_FALLBACK_STEP
+    fallback = _DEPTH_LADDER[max(0, min(len(_DEPTH_LADDER) - 1, plan.index + step))]
+
+    text = f"先钓 {primary}，无口再试 {fallback}"
+    reason = _dominant_depth_reason(plan.modifiers, plan.shift)
+    if reason:
+        text += f"（{reason}）"
+    return text
+
+
+# Depth ladder, shallowest first. Each rung is a band narrow enough to be
+# actionable; the string is what the card shows.
+_DEPTH_LADDER = (
+    "1–1.5m 浅水",
+    "1.5–2m 浅滩",
+    "2–2.5m 滩口",
+    "2.5–3m 斜坡",
+    "3–4m 深坎",
+    "4–5m 深水",
+)
+# How far the modifiers may move the starting rung. Two rungs is already a big
+# swing (1.5-2m -> 3-4m); letting them stack further would produce advice the
+# underlying guess cannot support.
+_MAX_DEPTH_SHIFT = 2
+_DEPTH_FALLBACK_STEP = 1
+# Human-readable cause, shown only for the dominant modifier so the card says
+# *why* it moved rather than listing every input.
+_DEPTH_REASONS = {
+    "hot": "高温鱼避热",
+    "diurnal": "昼夜温差大浅层变化快",
+    "shallow-warm": "浅水升温快",
+    "after-rain": "雨后鱼靠边",
+    "overcast": "阴天弱光鱼敢靠岸",
+    "bright": "晴天强光鱼避明",
+    "falling": "气压缓降鱼活跃上浮",
+    "rising": "气压骤升鱼沉底少动",
+    "calm": "风小水面溶氧一般",
+    "windy": "有风增氧可钓浅",
+    "cold-wind": "冷水遇风浅层更冷",
+}
+
+
+def _depth_base_index(temperature: float) -> int:
+    """Starting rung implied by water temperature (air temperature as proxy)."""
     if temperature < 5:
-        return "钓深水 3–5m，选择背风向阳的深水区"
-    if temperature > 32:
-        return "早晚钓 1.5–2m 浅滩，正午转 3m 以上深水"
-    return "先钓 1.5–2m 浅滩，无口则转 3m 以上"
+        return 5
+    if temperature < 12:
+        return 4
+    if temperature < 20:
+        return 3
+    if temperature <= 28:
+        return 2
+    if temperature <= 32:
+        return 1
+    return 0
+
+
+def _depth_modifiers(
+    weather: WeatherSnapshot, local_now: datetime
+) -> list[tuple[int, str]]:
+    """Shift the starting rung by the factors the engine already scored.
+
+    Each entry is (delta_rungs, reason_key). Only clearly-signed effects are
+    included: this is a fallback for a missing data source, so an unsupported
+    guess would be worse than the uniform sentence it replaces.
+    """
+    shifts: list[tuple[int, str]] = []
+
+    # Cold water: shallows warm first under sun, so shallow is the better bet —
+    # but only when there is sun. Warm water in the middle of a hot day: fish
+    # move off the flats.
+    if 5 <= weather.temperature < 12 and weather.cloud_cover_pct < 70:
+        shifts.append((-1, "shallow-warm"))
+    if local_now.month in (6, 7, 8) and 11 * 60 <= local_now.hour * 60 + local_now.minute < 15 * 60:
+        if weather.temperature > 28:
+            shifts.append((1, "hot"))
+
+    # F5: shortly after rain the fish run the margins where food washes in.
+    if weather.last_rain_hours_ago is not None and weather.last_rain_hours_ago <= 6:
+        shifts.append((-1, "after-rain"))
+
+    # F7: hard sun pushes fish off the flats in warm water — in winter the same
+    # sun is welcome and warms the shallows, which the shallow-warm rule above
+    # already covers. Overcast is deliberately a no-op: it removes the reason to
+    # go deep, which leaves the temperature baseline alone rather than adding a
+    # second shallow vote on top of the rain and pressure ones.
+    if weather.cloud_cover_pct < 30 and weather.temperature >= 20:
+        shifts.append((1, "bright"))
+
+    # F1: a gentle fall is the classic active-feeding signal; a sharp rise is
+    # the classic lockjaw one.
+    if -8 <= weather.pressure_change_24h < -2:
+        shifts.append((-1, "falling"))
+    elif weather.pressure_change_24h > 8:
+        shifts.append((1, "rising"))
+
+    # F2: unusually high pressure pushes fish down; notably low lets them roam.
+    if weather.pressure_msl > 1025:
+        shifts.append((1, "rising"))
+    elif weather.pressure_msl < 1000:
+        shifts.append((-1, "falling"))
+
+    # F4: a light chop oxygenates the shallows and masks an angler's profile —
+    # in warm water. In cold water the same wind chills the shallows, so it
+    # points the other way; reusing the summer reasoning there would be worse
+    # than saying nothing.
+    level = (
+        weather.wind_level
+        if weather.wind_level is not None
+        else wind_level_from_speed(weather.wind_speed_ms)
+    )
+    if 2 <= level <= 3:
+        shifts.append((-1, "windy") if weather.temperature >= 12 else (1, "cold-wind"))
+    elif level <= 1 and weather.temperature >= 12:
+        # Flat calm only argues for deeper water in the warm months. In winter
+        # it is neutral — there is no oxygen story to tell, and the cold-water
+        # baseline is already deep.
+        shifts.append((1, "calm"))
+
+    # F3: a big day/night swing moves the shallow band a lot through the day,
+    # so a rung deeper is the safer starting point than chasing it.
+    if weather.diurnal_range > 12:
+        shifts.append((1, "diurnal"))
+
+    return shifts
+
+
+# When several modifiers agree, prefer the one a reader would call the cause.
+# Rain and pressure describe the day; wind and light are secondary detail.
+_DEPTH_REASON_PRIORITY = (
+    "after-rain",
+    "falling",
+    "rising",
+    "hot",
+    "diurnal",
+    "shallow-warm",
+    "cold-wind",
+    "calm",
+    "bright",
+    "windy",
+)
+
+
+def _dominant_depth_reason(modifiers: list[tuple[int, str]], shift: int) -> str:
+    """Name the single biggest influence, and only when the advice moved."""
+    if not modifiers or shift == 0:
+        return ""
+    contributing = [item for item in modifiers if item[0] != 0]
+    if not contributing:
+        # Net zero: the card is back where temperature alone put it, so naming
+        # one cause would misrepresent the mix.
+        return ""
+    # Prefer a reason that pushed in the same direction as the net shift;
+    # otherwise the sentence would explain movement it did not cause.
+    aligned = [item for item in contributing if item[0] * shift > 0] or contributing
+    pick = min(
+        aligned,
+        key=lambda item: _DEPTH_REASON_PRIORITY.index(item[1])
+        if item[1] in _DEPTH_REASON_PRIORITY
+        else len(_DEPTH_REASON_PRIORITY),
+    )
+    return _DEPTH_REASONS.get(pick[1], "")
 
 
 def _recommendation(
@@ -415,7 +653,9 @@ def compute_fish_activity(
         factors=factors,
         top_factors=top_factors,
         best_windows=_best_windows(band, weather),
-        water_depth=_water_depth(weather.temperature),
-        suitable_species=_suitable_species(weather.temperature, species),
+        water_depth=_water_depth(weather, local_now, band=band),
+        suitable_species=_suitable_species(
+            weather, local_now, species, band=band
+        ),
         alerts=alerts,
     )

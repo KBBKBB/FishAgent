@@ -66,10 +66,21 @@ class SpeciesProvider(Protocol):
     A real Xiaohongshu adapter implements this protocol and returns one raw
     species list per input spot, in the same order. An empty list means the
     water body has no usable community recommendation.
+
+    ``resolves_empty`` distinguishes "I looked and found nothing" (True, the
+    default) from "I never look" (False, e.g. the null provider). Only the
+    former justifies a water-type fallback: for the latter the empty list is a
+    configuration choice, and inventing species would misrepresent it.
     """
 
     name: str
+    resolves_empty: bool
     source_label: str
+    # Optional presentation metadata. When omitted the service falls back to the
+    # Xiaohongshu wording so existing adapters keep their contract.
+    source_key: str
+    found_note: str
+    source_disclosure: str
 
     async def find_species(
         self,

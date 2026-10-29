@@ -64,6 +64,67 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(default="gpt-4o-mini", validation_alias="LLM_MODEL")
     llm_timeout_seconds: float = Field(default=30.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    # CR-05 image identification. Empty vision model falls back to LLM_MODEL.
+    llm_vision_model: str = Field(default="", validation_alias="LLM_VISION_MODEL")
+    identify_max_upload_bytes: int = Field(
+        default=8_388_608,
+        ge=65_536,
+        le=20_971_520,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_UPLOAD_BYTES",
+    )
+    identify_max_side: int = Field(
+        default=1280,
+        ge=256,
+        le=2048,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_SIDE",
+    )
+    # Pixel ceiling. This was the value behind the 2026-10-27 outage: hardcoded
+    # at 40 MP it rejected 48 MP iPhone photos. It must stay tunable so a new
+    # camera resolution never needs a code change to be accepted.
+    identify_max_image_pixels: int = Field(
+        default=80_000_000,
+        ge=1_000_000,
+        le=500_000_000,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_IMAGE_PIXELS",
+    )
+    identify_jpeg_quality: int = Field(
+        default=85,
+        ge=30,
+        le=95,
+        validation_alias="FISHAGENT_IDENTIFY_JPEG_QUALITY",
+    )
+    identify_timeout_seconds: float = Field(
+        default=60.0,
+        ge=5,
+        le=180,
+        validation_alias="FISHAGENT_IDENTIFY_TIMEOUT_SECONDS",
+    )
+    # Decoding a 48 MP photo peaks around 356 MB, so admission is priced by
+    # memory (a 12 MP photo costs ~91 MB) rather than by a fixed slot count.
+    # This budget is how many decoded photos' worth of RAM we accept at once.
+    identify_decode_memory_budget_mb: int = Field(
+        default=1536,
+        ge=256,
+        le=8192,
+        validation_alias="FISHAGENT_IDENTIFY_DECODE_MEMORY_BUDGET_MB",
+    )
+    # Bytes of RAM per decoded pixel, used to price a decode before running it.
+    # Measured at ~7.3 on this host; exposed because the true ratio depends on
+    # the Pillow/libheif build, so a different deployment may need its own.
+    identify_decode_bytes_per_pixel: float = Field(
+        default=7.5,
+        ge=1.0,
+        le=32.0,
+        validation_alias="FISHAGENT_IDENTIFY_DECODE_BYTES_PER_PIXEL",
+    )
+    # A separate cap because decoding is CPU-bound (~1 s for 48 MP on one core);
+    # memory headroom alone would let many small photos thrash the CPU.
+    identify_max_concurrent_decodes: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        validation_alias="FISHAGENT_IDENTIFY_MAX_CONCURRENT_DECODES",
+    )
 
     # Community species lookup (Step 3 "推荐鱼种"). Empty means "mock" in Mock
     # mode and "none" otherwise, so real deployments never invent community data.
@@ -81,6 +142,12 @@ class Settings(BaseSettings):
         ge=0,
         le=86_400,
         validation_alias="FISHAGENT_SPECIES_CACHE_TTL_SECONDS",
+    )
+    # Phase 2: fetch top result pages and let the LLM extract species. Off by
+    # default so Phase 1 behaviour (snippet matching only) stays the baseline.
+    species_page_fetch_enabled: bool = Field(
+        default=False,
+        validation_alias="FISHAGENT_SPECIES_PAGE_FETCH",
     )
 
     # CR-03 pilot access. Every field below is inert unless

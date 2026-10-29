@@ -1,7 +1,7 @@
 'use strict';
 
 // Bump CACHE_VERSION whenever a precached shell asset changes.
-var CACHE_VERSION = 'fishagent-v5';
+var CACHE_VERSION = 'fishagent-v14';
 var STATIC_CACHE = CACHE_VERSION + '-static';
 var PRECACHE_URLS = [
   '/',
@@ -19,9 +19,17 @@ var OFFLINE_API_MESSAGE = '当前处于离线状态，无法获取实时数据�
 
 self.addEventListener('install', function (event) {
   event.waitUntil(
-    caches.open(STATIC_CACHE).then(function (cache) {
-      return cache.addAll(PRECACHE_URLS);
-    })
+    caches
+      .open(STATIC_CACHE)
+      .then(function (cache) {
+        return cache.addAll(PRECACHE_URLS);
+      })
+      // Take over immediately. Without this the new worker waits for every old
+      // tab to close, and because static assets below are cache-first a phone
+      // that never fully closes the page keeps serving the previous app.js.
+      .then(function () {
+        return self.skipWaiting();
+      })
   );
 });
 
@@ -94,10 +102,20 @@ function handleNavigation(request) {
     });
 }
 
+// Shell assets are the code itself: app.js, styles.css, index.html. They must
+// be network-first. Stale-while-revalidate served the cached copy first on
+// every load and only refreshed in the background, so a phone that never fully
+// closed the page kept executing the previous app.js — a deploy was invisible
+// until the user happened to load the page twice. Cache-first is right for
+// icons and the manifest (they never carry behaviour), wrong for code.
+var SHELL_PATHS = ['/app.js', '/styles.css', '/index.html'];
+
 function handleStatic(request) {
+  var url = new URL(request.url);
+  var isShell = SHELL_PATHS.indexOf(url.pathname) !== -1;
+
   return caches.match(request).then(function (cached) {
-    if (cached) return cached;
-    return fetch(request)
+    var network = fetch(request, isShell ? { cache: 'no-store' } : undefined)
       .then(function (response) {
         if (response && response.ok && response.type === 'basic') {
           var copy = response.clone();
@@ -108,8 +126,12 @@ function handleStatic(request) {
         return response;
       })
       .catch(function () {
-        return new Response('', { status: 504, statusText: 'Offline' });
+        return cached || new Response('', { status: 504, statusText: 'Offline' });
       });
+    // Shell: wait for the network (it is a few tens of KB on the same origin),
+    // and fall back to cache only when offline. Everything else keeps the
+    // instant-from-cache path.
+    return isShell ? network : cached || network;
   });
 }
 

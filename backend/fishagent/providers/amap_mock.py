@@ -146,6 +146,11 @@ def _build_candidates(origin_gcj: LatLon) -> list[SpotCandidate]:
 class MockGeoProvider:
     """Mock POI search around the user; each call still honours <=50 km."""
 
+    # The mock models asymmetric out/back travel factors, so the service must
+    # ask for both directions. The live AMap provider ignores ``direction`` and
+    # leaves this False, halving its calls.
+    direction_affects_result = True
+
     async def find_water_spots(
         self,
         origin: LatLon,

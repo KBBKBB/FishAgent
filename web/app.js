@@ -10,7 +10,11 @@
   var DEFAULT_RADIUS_KM = 50;
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
-  var SPECIES_TIMEOUT_MS = 4500;
+  // 后端自己的预算是 FISHAGENT_SPECIES_TIMEOUT_SECONDS（默认 4.0s），它会在预算
+  // 用完时返回 degraded 结果而不是一直等。前端的闹钟必须比它晚到，否则手机网络
+  // 上往返那几百毫秒就足以让前端先掐断——用户看到"请求超时"，而后端日志里其实是
+  // 200 OK，白丢一次已经查到的结果。留 3.5s 余量给移动网络和 JSON 落盘。
+  var SPECIES_TIMEOUT_MS = 7500;
   // 鱼情分析要拉实时天气，正常 1.5-4s。
   var ACTIVITY_TIMEOUT_MS = 15000;
   // 钓位推荐每条候选都要调高德路径规划，而高德账号硬性限制 2 QPS，

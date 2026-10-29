@@ -324,7 +324,32 @@ class BingSpeciesProvider:
         to_fetch = urls[: min(fetch_budget, _PAGE_CONCURRENCY)]
         fetches_used = len(to_fetch)
         try:
-            pages = await self._fetch_pages(client, to_fetch)
+            # Bound the whole stage by the deadline, not just each request.
+            #
+            # The client timeout is the full provider budget, so a single slow
+            # host could sit there for the entire window. That did not merely
+            # delay the answer: the caller's own ``wait_for`` then fired and
+            # cancelled the batch, discarding the whole response — including the
+            # snippet hits that had already been found. Measured 2026-10-29,
+            # one tieba.baidu.com page held the batch open for 10.9s against a
+            # 4s budget, so every request on a cold cache timed out.
+            remaining = None
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return normalize_species(result), 0, 0
+            pages = (
+                await self._fetch_pages(client, to_fetch)
+                if remaining is None
+                else await asyncio.wait_for(
+                    self._fetch_pages(client, to_fetch), timeout=remaining
+                )
+            )
+        except TimeoutError:
+            # Out of budget: keep whatever the SERP already gave us rather than
+            # failing the spot. Losing a page is cheap; losing the batch is not.
+            logger.info("page fetch hit the request deadline; keeping snippet hits")
+            return normalize_species(result), fetches_used, 0
         except Exception:  # noqa: BLE001 - a failed page must never fail the lookup
             logger.warning("page fetch stage failed", exc_info=True)
             pages = []

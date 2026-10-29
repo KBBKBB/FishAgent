@@ -1140,3 +1140,133 @@ def test_degraded_serp_yields_no_species_instead_of_noise():
 
     found = asyncio.run(provider._search(_Client(), SpotSpeciesQuery(name="三岔湖")))
     assert found == ([], [])
+
+
+# --- Phase 2 must fit inside the request budget -----------------------------
+#
+# Measured 2026-10-29 on the real serp: a single tieba.baidu.com page kept the
+# page-fetch stage open for 10.9s against a 4s provider budget. The stage had no
+# deadline of its own, only the per-request client timeout, so it outlived the
+# caller's ``wait_for``; the cancellation then threw away the whole batch,
+# including snippet hits that had already been found. From the phone that looked
+# like "请求超时", while the server actually answered 200 with every spot empty.
+
+
+def _deadline_provider(**kwargs):
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    return BingSpeciesProvider(timeout_seconds=0.5, **kwargs)
+
+
+def test_page_fetch_cannot_outlive_the_deadline(monkeypatch):
+    """A hung page yields the snippet hits instead of cancelling the batch."""
+    from fishagent.providers import species_bing
+
+    async def hang(self, client, urls):
+        await asyncio.sleep(60)
+        return []
+
+    monkeypatch.setattr(species_bing.BingSpeciesProvider, "_fetch_pages", hang)
+    provider = _deadline_provider()
+
+    class _Client:
+        pass
+
+    started = time.monotonic()
+    result, fetches, calls = asyncio.run(
+        provider._deepen(
+            _Client(),
+            ["鲫鱼"],
+            ["https://example.com/a"],
+            fetch_budget=3,
+            llm_budget=0,
+            deadline=time.monotonic() + 0.3,
+        )
+    )
+    elapsed = time.monotonic() - started
+    # The snippet hit survives; the stage does not run to the client timeout.
+    assert result == ["鲫鱼"]
+    assert calls == 0
+    assert elapsed < 2.0, f"page fetch ignored the deadline ({elapsed:.2f}s)"
+
+
+def test_deadline_already_passed_skips_fetching_entirely():
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    called = {"n": 0}
+
+    async def should_not_run(self, client, urls):
+        called["n"] += 1
+        return []
+
+    from fishagent.providers import species_bing
+
+    original = species_bing.BingSpeciesProvider._fetch_pages
+    species_bing.BingSpeciesProvider._fetch_pages = should_not_run
+    try:
+        provider = BingSpeciesProvider()
+        result, fetches, _ = asyncio.run(
+            provider._deepen(
+                object(),
+                ["鲤鱼"],
+                ["https://example.com/a"],
+                fetch_budget=3,
+                llm_budget=0,
+                deadline=time.monotonic() - 1,
+            )
+        )
+    finally:
+        species_bing.BingSpeciesProvider._fetch_pages = original
+    assert called["n"] == 0
+    assert result == ["鲤鱼"]
+    assert fetches == 0
+
+
+def test_a_hung_page_cannot_make_the_whole_batch_time_out():
+    """End to end: the batch finishes inside its own budget, not the caller's.
+
+    This is the shape that reached the phones: the serp was fine, one result
+    page hung, and the batch ran past the provider budget until the caller's
+    ``wait_for`` cancelled it. The spot's snippet hits were already resolved by
+    then, so the user lost a result we actually had.
+    """
+    from fishagent.providers import species_bing
+
+    async def hang(self, client, urls):
+        await asyncio.sleep(60)
+        return []
+
+    provider = species_bing.BingSpeciesProvider(
+        timeout_seconds=0.6, extractor=None, enable_page_fetch=True
+    )
+
+    class _Client:
+        pass
+
+    original = species_bing.BingSpeciesProvider._fetch_pages
+    species_bing.BingSpeciesProvider._fetch_pages = hang
+
+    async def batch():
+        started = time.monotonic()
+        deepened = await asyncio.gather(
+            *(
+                provider._deepen(
+                    _Client(),
+                    ["鲫鱼"],
+                    ["https://example.com/hung"],
+                    fetch_budget=3,
+                    llm_budget=0,
+                    deadline=started + 0.3,
+                )
+                for _ in range(4)
+            )
+        )
+        return deepened, time.monotonic() - started
+
+    try:
+        deepened, elapsed = asyncio.run(asyncio.wait_for(batch(), timeout=30))
+    finally:
+        species_bing.BingSpeciesProvider._fetch_pages = original
+
+    assert [species for species, _, _ in deepened] == [["鲫鱼"]] * 4
+    assert elapsed < 2.0, f"a hung page held the batch for {elapsed:.2f}s"

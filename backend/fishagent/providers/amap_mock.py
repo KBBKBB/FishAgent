@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from fishagent.core.coords import gcj02_to_wgs84, haversine_m, wgs84_to_gcj02
-from fishagent.schemas import LatLon, SpotCandidate
+from fishagent.schemas import LatLon, PlaceCandidate, SpotCandidate
 
 _MAX_RADIUS_M = 50_000
 
@@ -179,6 +179,68 @@ class MockGeoProvider:
             if distance <= radius_m:
                 result.append(candidate)
         return result
+
+    async def search_places(self, keyword: str, *, limit: int = 8) -> list[PlaceCandidate]:
+        """Deterministic name search so the picker works without a real key."""
+        text = (keyword or "").strip()
+        if not text:
+            return []
+        # Match against the known demo spots first, then fall back to a single
+        # synthetic result so the UI always has something to select.
+        matches = [spec for spec in _SPOT_SPECS if text in spec["name"]]
+        results: list[PlaceCandidate] = []
+        for spec in matches[:limit]:
+            results.append(
+                PlaceCandidate(
+                    name=spec["name"],
+                    address=spec["address"],
+                    lat=round(30.657 + spec["north_km"] / 111.32, 4),
+                    lon=round(104.066 + spec["east_km"] / 86.0, 4),
+                    kind="place",
+                )
+            )
+        if results:
+            return results
+        return [
+            PlaceCandidate(
+                name=text,
+                address="Mock 地名解析结果",
+                lat=30.657,
+                lon=104.066,
+                kind="place",
+            )
+        ]
+
+    async def nearby_water(
+        self, origin: LatLon, *, radius_m: int = 30_000, limit: int = 8
+    ) -> list[PlaceCandidate]:
+        """Nearby demo water bodies, in the same shape as the live provider."""
+        if radius_m <= 0:
+            return []
+        origin_gcj = wgs84_to_gcj02(origin.lat, origin.lon)
+        places: list[PlaceCandidate] = []
+        for candidate in _build_candidates(
+            LatLon(lat=origin_gcj.lat, lon=origin_gcj.lon)
+        ):
+            location = candidate.location_gcj02
+            distance = haversine_m(
+                origin_gcj.lat, origin_gcj.lon, location.lat, location.lon
+            )
+            if distance > radius_m:
+                continue
+            wgs = gcj02_to_wgs84(location.lat, location.lon)
+            places.append(
+                PlaceCandidate(
+                    name=candidate.name,
+                    address=candidate.address,
+                    lat=round(wgs.lat, 4),
+                    lon=round(wgs.lon, 4),
+                    kind=candidate.water_type,
+                    distance_m=int(distance),
+                )
+            )
+        places.sort(key=lambda item: item.distance_m or 0)
+        return places[:limit]
 
     async def estimate_drive_seconds(
         self,

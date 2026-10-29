@@ -21,6 +21,8 @@
   // 10 个候选冷启动约 10s。给足余量，超时后提示"较慢"而不是"不可用"。
   var SPOTS_TIMEOUT_MS = 45000;
   var IDENTIFY_TIMEOUT_MS = 60000;
+  // 地名搜索/附近水域是高德 POI 查询，和钓鱼种查询一样是一次外呼，不需要长等待。
+  var GEO_TIMEOUT_MS = 12000;
   var IDENTIFY_MAX_BYTES = 8 * 1024 * 1024;
   var IDENTIFY_MAX_NOTE = 100;
   var IDENTIFY_MAX_BYTES_TEXT = '图片过大，请压缩后重试';
@@ -2205,10 +2207,10 @@
       },
       function (error) {
         button.disabled = false;
-        var message = '定位失败，请手动输入坐标。';
-        if (error && error.code === 1) message = '定位权限被拒绝，请允许权限或手动输入坐标。';
-        else if (error && error.code === 2) message = '当前无法获取位置，请手动输入坐标。';
-        else if (error && error.code === 3) message = '定位超时，请重试或手动输入坐标。';
+        var message = '定位失败，请搜索地名或手动输入坐标。';
+        if (error && error.code === 1) message = '定位权限被拒绝，请搜索地名或手动输入坐标。';
+        else if (error && error.code === 2) message = '当前无法获取位置，请搜索地名或手动输入坐标。';
+        else if (error && error.code === 3) message = '定位超时，请重试或搜索地名。';
         setGeoStatus(message);
         setStatus(message, 'error');
       },
@@ -2216,8 +2218,163 @@
     );
   }
 
+  // --- 位置选择器：地名搜索 / 附近水域 -----------------------------------
+  //
+  // 原来 Step 1 唯一的手动入口是一对经纬度输入框，这对普通用户没有意义 --
+  // 钓鱼的人记得住"青龙湖"，记不住 30.6570。地名搜索和附近水域列表把这两条
+  // 更自然的路径放在前面，坐标输入收进"高级"里给需要精确复现的人。
+
+  function placeKey(place) {
+    return String(place.lat) + ',' + String(place.lon);
+  }
+
+  function renderPlaceList(list, places, onPick) {
+    list.textContent = '';
+    places.forEach(function (place) {
+      var item = el('li', 'place-item');
+      var button = el('button', 'place-choice');
+      button.type = 'button';
+      button.setAttribute('role', 'option');
+      button.append(el('span', 'place-name', place.name));
+      var meta = [];
+      if (place.address) meta.push(place.address);
+      if (place.kind && place.kind !== 'place') meta.push(place.kind);
+      if (typeof place.distance_m === 'number') {
+        var km = place.distance_m / 1000;
+        meta.push(km < 1 ? '约 ' + Math.round(place.distance_m) + ' 米' : '约 ' + km.toFixed(1) + ' 公里');
+      }
+      if (meta.length) button.append(el('span', 'place-meta', meta.join(' · ')));
+      button.addEventListener('click', function () {
+        onPick(place);
+      });
+      item.append(button);
+      list.append(item);
+    });
+  }
+
+  function applyPlace(place, sourceLabel) {
+    var lat = roundCoord(Number(place.lat));
+    var lon = roundCoord(Number(place.lon));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setStatus('这个地点没有可用的坐标，请换一个。', 'error');
+      return;
+    }
+    state.lat = lat;
+    state.lon = lon;
+    state.name = place.name || sourceLabel;
+    syncLocationUI();
+    hidePlaceLists();
+    setGeoStatus('已选择「' + state.name + '」，正在重新分析。');
+    setStatus('位置已更新为「' + state.name + '」，正在重新分析。', 'info', true);
+    refreshAll();
+  }
+
+  function hidePlaceLists() {
+    var results = $('place-results');
+    if (results) results.hidden = true;
+    var nearby = $('nearby-list');
+    if (nearby) nearby.hidden = true;
+  }
+
+  function setPlaceBusy(busy) {
+    var searchBtn = $('place-search-btn');
+    var input = $('place-input');
+    if (searchBtn) searchBtn.disabled = busy;
+    if (input) input.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+
+  function showPlaceMessage(list, text) {
+    list.textContent = '';
+    var item = el('li', 'place-empty');
+    item.textContent = text;
+    list.append(item);
+    list.hidden = false;
+  }
+
+  async function handlePlaceSearch(event) {
+    if (event) event.preventDefault();
+    var input = $('place-input');
+    var keyword = input ? input.value.trim() : '';
+    var results = $('place-results');
+    var list = $('place-list');
+    var label = $('place-results-label');
+    if (!keyword) {
+      setGeoStatus('请输入地名或钓点名称。');
+      if (input) input.focus();
+      return;
+    }
+    hidePlaceLists();
+    results.hidden = false;
+    if (label) label.textContent = '正在搜索「' + keyword + '」…';
+    list.textContent = '';
+    setPlaceBusy(true);
+    try {
+      var data = await requestJSON(
+        buildQuery('/api/geo/search', { q: keyword }),
+        {},
+        { timeoutMs: GEO_TIMEOUT_MS }
+      );
+      var places = Array.isArray(data && data.results) ? data.results : [];
+      if (label) label.textContent = '「' + keyword + '」的搜索结果';
+      if (!places.length) {
+        // resolved=false 表示这个 provider 根本不会搜索，不是"没这个地方" --
+        // 把两者说成一样会让用户以为是自己打错了。
+        var cannot = data && data.resolved === false;
+        showPlaceMessage(
+          list,
+          cannot ? '当前数据源不支持地名搜索，请使用附近的定位或手动输入坐标。' : '没有找到这个地名，换个说法试试，或使用「附近水域」。'
+        );
+        return;
+      }
+      renderPlaceList(list, places, function (place) {
+        applyPlace(place, '搜索结果');
+      });
+      list.hidden = false;
+    } catch (error) {
+      if (label) label.textContent = '搜索失败';
+      showPlaceMessage(list, (error && error.message) || '地名搜索失败，请稍后重试。');
+    } finally {
+      setPlaceBusy(false);
+    }
+  }
+
+  async function handleNearby(event) {
+    if (event) event.preventDefault();
+    var list = $('nearby-list');
+    var button = $('nearby-btn');
+    hidePlaceLists();
+    if (button) button.disabled = true;
+    showPlaceMessage(list, '正在查找附近水域…');
+    try {
+      var data = await requestJSON(
+        buildQuery('/api/geo/nearby', { lat: state.lat, lon: state.lon }),
+        {},
+        { timeoutMs: GEO_TIMEOUT_MS }
+      );
+      var places = Array.isArray(data && data.results) ? data.results : [];
+      if (!places.length) {
+        showPlaceMessage(list, '附近没有查到已收录的水域，可以直接用当前定位分析。');
+        return;
+      }
+      renderPlaceList(list, places, function (place) {
+        applyPlace(place, '附近水域');
+      });
+      list.hidden = false;
+    } catch (error) {
+      showPlaceMessage(list, (error && error.message) || '查找附近水域失败，请稍后重试。');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function bindEvents() {
     $('coord-form').addEventListener('submit', handleManualLocation);
+    $('place-form').addEventListener('submit', handlePlaceSearch);
+    $('place-search-btn').addEventListener('click', handlePlaceSearch);
+    $('place-results-close').addEventListener('click', function () {
+      $('place-results').hidden = true;
+    });
+    $('nearby-btn').addEventListener('click', handleNearby);
     $('geo-btn').addEventListener('click', handleGeolocation);
     $('radius-select').addEventListener('change', handleRadiusChange);
     $('spots-refresh').addEventListener('click', handleSpotsRefresh);

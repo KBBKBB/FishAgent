@@ -67,19 +67,51 @@
         </div>
         <div class="location-row">
           <button type="button" class="btn btn-primary" id="geo-btn">使用我的定位</button>
-          <span class="hint">或手动输入 WGS84 坐标（GPS 原始坐标）</span>
         </div>
-        <form class="coord-form" id="coord-form" novalidate>
-          <label class="field">
-            <span>纬度</span>
-            <input id="lat-input" name="lat" type="number" inputmode="decimal" step="0.0001" min="-90" max="90" required>
+
+        <form class="place-form" id="place-form" role="search" novalidate>
+          <label class="field place-field">
+            <span>搜索地名或钓点</span>
+            <input
+              id="place-input"
+              name="q"
+              type="search"
+              inputmode="search"
+              autocomplete="off"
+              enterkeyhint="search"
+              maxlength="60"
+              placeholder="例如：青龙湖、三岔湖、黑龙滩水库">
           </label>
-          <label class="field">
-            <span>经度</span>
-            <input id="lon-input" name="lon" type="number" inputmode="decimal" step="0.0001" min="-180" max="180" required>
-          </label>
-          <button type="submit" class="btn btn-secondary">更新分析</button>
+          <button type="submit" class="btn btn-secondary" id="place-search-btn">搜索</button>
         </form>
+        <div class="place-results" id="place-results" hidden>
+          <div class="place-results-head">
+            <span id="place-results-label">搜索结果</span>
+            <button type="button" class="link-btn" id="place-results-close">收起</button>
+          </div>
+          <ul class="place-list" id="place-list" role="listbox" aria-labelledby="place-results-label"></ul>
+        </div>
+
+        <div class="nearby-block">
+          <button type="button" class="link-btn" id="nearby-btn">看看附近有哪些水域</button>
+          <ul class="place-list" id="nearby-list" role="listbox" aria-label="附近水域" hidden></ul>
+        </div>
+
+        <details class="coord-details" id="coord-details">
+          <summary>高级：手动输入坐标</summary>
+          <p class="hint">已知精确的 WGS84 坐标（GPS 原始坐标）时可直接填写，用于核对具体岸边位置。</p>
+          <form class="coord-form" id="coord-form" novalidate>
+            <label class="field">
+              <span>纬度</span>
+              <input id="lat-input" name="lat" type="number" inputmode="decimal" step="0.0001" min="-90" max="90" required>
+            </label>
+            <label class="field">
+              <span>经度</span>
+              <input id="lon-input" name="lon" type="number" inputmode="decimal" step="0.0001" min="-180" max="180" required>
+            </label>
+            <button type="submit" class="btn btn-secondary">更新分析</button>
+          </form>
+        </details>
         <p class="hint" id="geo-status" role="status" aria-live="polite"></p>
       </section>
 

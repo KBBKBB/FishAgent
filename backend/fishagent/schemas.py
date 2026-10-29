@@ -119,6 +119,35 @@ class FishActivityResponse(BaseModel):
     generated_at: str
 
 
+class PlaceCandidate(BaseModel):
+    """A location the user can pick as their starting point.
+
+    Coordinates are WGS84: AMap answers in GCJ-02 and the provider converts at
+    its own boundary, so everything above that is one datum.
+    """
+
+    name: str
+    address: str = ""
+    lat: float
+    lon: float
+    # "place" for text search; the water type ("湖泊"/"河流"…) for nearby water.
+    kind: str = "place"
+    distance_m: int | None = None
+
+
+class PlaceSearchResponse(BaseModel):
+    """Location-picker results.
+
+    ``resolved`` separates "searched, nothing found" from "this provider cannot
+    search at all", so the UI can offer the manual form as the right next step
+    instead of telling the user their place does not exist.
+    """
+
+    results: list[PlaceCandidate]
+    query: str = ""
+    resolved: bool = True
+
+
 class SpotCandidate(BaseModel):
     id: str
     name: str

@@ -14,6 +14,7 @@ from starlette.types import Scope
 
 from fishagent import __version__
 from fishagent.api.fish_activity import router as fish_router
+from fishagent.api.geo import router as geo_router
 from fishagent.api.identify import router as identify_router
 from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(meta_router)
     app.include_router(fish_router)
     app.include_router(spots_router)
+    app.include_router(geo_router)
     app.include_router(species_router)
     app.include_router(_agent_router())
     app.include_router(identify_router)

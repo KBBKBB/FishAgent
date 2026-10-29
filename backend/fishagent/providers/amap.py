@@ -15,9 +15,9 @@ from typing import Any
 
 import httpx
 
-from fishagent.core.coords import wgs84_to_gcj02
+from fishagent.core.coords import gcj02_to_wgs84, wgs84_to_gcj02
 from fishagent.providers.base import ProviderError
-from fishagent.schemas import LatLon, SpotCandidate
+from fishagent.schemas import LatLon, PlaceCandidate, SpotCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,15 @@ def _parse_location(value: Any) -> LatLon | None:
     return LatLon(lat=lat, lon=lon)
 
 
+def _coerce_distance(value: Any) -> int | None:
+    """AMap reports distance as a metres string; absent for some POI types."""
+    try:
+        metres = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(metres) if metres >= 0 else None
+
+
 def _parse_batch_durations(payload: dict[str, Any], count: int) -> list[int | None]:
     durations: list[int | None] = [None] * count
     for position, item in enumerate(payload.get("results") or []):
@@ -128,6 +137,34 @@ def _is_water_poi(name: str, typecode: str) -> bool:
     if not is_water:
         return False
     return not _has_business_name(name)
+
+
+def _is_water_place(name: str, typecode: str) -> bool:
+    """Looser water test for TEXT search results.
+
+    ``/v3/place/text`` returns coarse category codes (``110200`` 风景名胜区,
+    ``110203`` 水库, ``110000`` 景区) where ``/v3/place/around`` returns the
+    leaf codes ``_is_water_poi`` was written against (``190204`` 河流,
+    ``190205`` 湖泊). Reusing the strict test here matched nothing at all, so
+    the ranking silently did nothing on every live search.
+
+    The rule is therefore prefix-based, with the name as the deciding signal:
+    anything under 风景名胜/公园 that names a water body counts, as does a
+    name carrying a water word regardless of category (bridges and dams do not
+    name a body of water, so they stay out).
+    """
+    if _has_business_name(name):
+        return False
+    codes = _typecodes(typecode)
+    named_water = any(hint in name for hint in _WATER_NAME_HINTS)
+    if not named_water:
+        return False
+    scenic = any(code.startswith(("1102", "1100")) for code in codes)
+    strict = any(code in _WATER_TYPE_CODES for code in codes)
+    # 桥梁/码头/收费站 describe access to water, not a place to fish from.
+    if any(word in name for word in ("桥", "码头", "收费站", "闸", "堤")):
+        return False
+    return bool(scenic or strict)
 
 
 def _water_type(name: str, typecode: str) -> str:
@@ -215,6 +252,107 @@ class AMapGeoProvider:
         if not spots:
             logger.warning("AMap around search returned no usable POIs")
         return spots
+
+    async def search_places(self, keyword: str, *, limit: int = 8) -> list[PlaceCandidate]:
+        """Text search for a place by name, for the location picker.
+
+        Separate from ``find_water_spots``: the user typed something they know
+        by name ("青龙湖"), and it may be an administrative area, a scenic spot
+        or a water body. Nothing is filtered out — a village or a park gate is a
+        perfectly good place to start from — but water is ranked first, because
+        that is nearly always what an angler meant.
+
+        Coordinates come back converted to WGS84, because that is what the rest
+        of the API accepts; the datum shift happens at this boundary only.
+        """
+        text = (keyword or "").strip()
+        if not text:
+            return []
+        payload = await self._get(
+            "/v3/place/text",
+            {
+                "key": self._api_key,
+                "keywords": text,
+                "offset": max(1, min(limit, 20)),
+                "page": 1,
+                "extensions": "base",
+            },
+        )
+        # Water first. Searching "三岔湖" returned the lake, the reservoir and a
+        # hotel, then a motorway toll gate: all correct matches, but only the
+        # water is somewhere an angler can fish from. Ranking is stable, so
+        # AMap's own relevance order survives inside each group.
+        water: list[PlaceCandidate] = []
+        others: list[PlaceCandidate] = []
+        for poi in payload.get("pois") or []:
+            if not isinstance(poi, dict):
+                continue
+            name = str(poi.get("name") or "").strip()
+            location = _parse_location(poi.get("location"))
+            if not name or location is None:
+                continue
+            # AMap answers in GCJ-02; the API accepts WGS84 everywhere else.
+            wgs = gcj02_to_wgs84(location.lat, location.lon)
+            typecode = str(poi.get("typecode") or "").strip()
+            # Text search reports coarse category codes, not the leaf codes
+            # _is_water_poi expects; see _is_water_place.
+            is_water = _is_water_place(name, typecode)
+            entry = PlaceCandidate(
+                name=name,
+                address=str(poi.get("address") or "").strip(),
+                lat=round(wgs.lat, 4),
+                lon=round(wgs.lon, 4),
+                kind=_water_type(name, typecode) if is_water else "place",
+            )
+            (water if is_water else others).append(entry)
+        return water + others
+
+    async def nearby_water(
+        self, origin: LatLon, *, radius_m: int = 30_000, limit: int = 8
+    ) -> list[PlaceCandidate]:
+        """Water bodies around a point, as tappable choices.
+
+        Shares the classification used by the spot recommender, so the list
+        cannot offer a river that the recommender would then reject.
+        """
+        if radius_m <= 0:
+            return []
+        center = wgs84_to_gcj02(origin.lat, origin.lon)
+        payload = await self._get(
+            "/v3/place/around",
+            {
+                "key": self._api_key,
+                "location": f"{center.lon:.6f},{center.lat:.6f}",
+                "radius": int(min(radius_m, _MAX_RADIUS_M)),
+                "types": _NATURAL_WATER_TYPES,
+                "sortrule": "distance",
+                "offset": max(1, min(limit, 25)),
+                "page": 1,
+                "extensions": "base",
+            },
+        )
+        places: list[PlaceCandidate] = []
+        for poi in payload.get("pois") or []:
+            if not isinstance(poi, dict):
+                continue
+            name = str(poi.get("name") or "").strip()
+            typecode = str(poi.get("typecode") or "").strip()
+            location = _parse_location(poi.get("location"))
+            if not name or location is None or not _is_water_poi(name, typecode):
+                continue
+            distance = poi.get("distance")
+            wgs = gcj02_to_wgs84(location.lat, location.lon)
+            places.append(
+                PlaceCandidate(
+                    name=name,
+                    address=str(poi.get("address") or "").strip(),
+                    lat=round(wgs.lat, 4),
+                    lon=round(wgs.lon, 4),
+                    kind=_water_type(name, typecode),
+                    distance_m=_coerce_distance(distance),
+                )
+            )
+        return places
 
     async def estimate_drive_seconds(
         self,

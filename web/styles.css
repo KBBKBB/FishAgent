@@ -442,6 +442,165 @@ h3 {
   font-size: 12.5px;
 }
 
+/* 地名搜索：普通用户的主路径，坐标输入收进"高级" */
+.place-form {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+
+.place-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.place-form .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-btn:hover {
+  color: var(--brand-dark, #0a5541);
+}
+
+.link-btn:disabled {
+  color: var(--ink-soft);
+  cursor: default;
+  text-decoration: none;
+}
+
+.place-results {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.place-results-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.place-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.place-item {
+  margin: 0;
+}
+
+/* 每一项都是整块可点的按钮，拇指够得着，不用瞄准文字 */
+.place-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.place-choice:hover {
+  background: #fff;
+  border-color: var(--line);
+}
+
+.place-choice:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(14, 107, 82, 0.12);
+}
+
+.place-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.place-meta {
+  font-size: 12px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.place-empty {
+  padding: 8px 2px;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.nearby-block {
+  margin-bottom: 10px;
+}
+
+.coord-details {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.coord-details > summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+}
+
+.coord-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.coord-details > summary::before {
+  content: '▸ ';
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.coord-details[open] > summary::before {
+  content: '▾ ';
+}
+
+.coord-details > summary:hover {
+  color: var(--brand);
+}
+
+.coord-details .hint {
+  margin: 6px 0 8px;
+}
+
 .coord-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

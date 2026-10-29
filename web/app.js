@@ -2185,9 +2185,22 @@
 
   function handleGeolocation() {
     if (!('geolocation' in navigator)) {
-      setStatus('当前浏览器不支持定位，请手动输入坐标。', 'error');
+      setStatus('当前浏览器不支持定位，请搜索地名或手动输入坐标。', 'error');
       return;
     }
+    // 非安全上下文（http 访问局域网 IP）下，浏览器把「根本不给用」也报成
+    // PERMISSION_DENIED（code 1），和用户真的点了"拒绝"完全无法区分。若不
+    // 在这里先分辨，提示就会变成「定位权限被拒绝」，把人推去找一个永远改不
+    // 好的开关——这和把服务超时说成「不支持的图片格式」是同一类错误。
+    if (window.isSecureContext === false) {
+      var insecure =
+        '当前是 http 地址，浏览器不提供定位能力（不是权限问题）。' +
+        '请改用 https 地址打开，或直接搜索地名、手动输入坐标。';
+      setGeoStatus(insecure);
+      setStatus(insecure, 'error');
+      return;
+    }
+    hidePlaceLists();
     var button = $('geo-btn');
     button.disabled = true;
     setGeoStatus('正在获取定位…');
@@ -2197,6 +2210,7 @@
         var lat = roundCoord(position.coords.latitude);
         var lon = roundCoord(position.coords.longitude);
         var accuracy = Math.round(Number(position.coords.accuracy) || 0);
+        // 定位是用户当下所在，优先级最高：直接覆盖之前搜索或点选的地点。
         state.lat = lat;
         state.lon = lon;
         state.name = '我的位置';
@@ -2208,9 +2222,13 @@
       function (error) {
         button.disabled = false;
         var message = '定位失败，请搜索地名或手动输入坐标。';
-        if (error && error.code === 1) message = '定位权限被拒绝，请搜索地名或手动输入坐标。';
-        else if (error && error.code === 2) message = '当前无法获取位置，请搜索地名或手动输入坐标。';
-        else if (error && error.code === 3) message = '定位超时，请重试或搜索地名。';
+        if (error && error.code === 1) {
+          message = '定位权限被拒绝，请在浏览器设置中允许本站定位，或搜索地名。';
+        } else if (error && error.code === 2) {
+          message = '当前无法获取位置（可能是系统定位已关闭），请搜索地名或手动输入坐标。';
+        } else if (error && error.code === 3) {
+          message = '定位超时，请重试或搜索地名。';
+        }
         setGeoStatus(message);
         setStatus(message, 'error');
       },

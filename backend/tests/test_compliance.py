@@ -124,3 +124,43 @@ def test_chat_response_compliance(client):
     serialized = response.text
     for pattern in PROMISE_PATTERNS:
         assert pattern not in serialized, f"对话响应含承诺性表述：{pattern}"
+
+
+# --- 定位失败必须说真话 -----------------------------------------------------
+#
+# 实故障（2026-10-29，真机）：用 http 访问局域网 IP 时 isSecureContext=false，
+# 浏览器把「根本不提供定位」也报成 PERMISSION_DENIED（code 1），前端于是统一
+# 提示「定位权限被拒绝」。用户去找一个永远改不好的权限开关，而真正的原因是
+# 地址不是 https。这与把服务超时说成「不支持的图片格式」是同一类错误。
+
+
+def test_geolocation_checks_secure_context_before_blaming_permission():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+
+    # 必须先分辨非安全上下文，再进入 getCurrentPosition。
+    secure_at = body.find("isSecureContext")
+    call_at = body.find("getCurrentPosition")
+    assert secure_at != -1, "定位逻辑未检查 isSecureContext，http 下必然谎报权限被拒"
+    assert call_at != -1
+    assert secure_at < call_at, "isSecureContext 检查必须在调用定位之前"
+
+
+def test_geolocation_rejection_message_is_not_the_only_code_1_explanation():
+    """code 1 有两种原因，提示里不能只说「权限被拒绝」这一种。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+    assert "不是权限问题" in body, "非安全上下文的提示需明确排除权限原因"
+
+
+def test_geolocation_hides_stale_picker_results():
+    """点了定位却仍显示上次搜索的列表，会让人以为定位没生效。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+    assert "hidePlaceLists()" in body

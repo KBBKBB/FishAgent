@@ -75,3 +75,36 @@ def normalize_species(
         if len(result) >= limit:
             break
     return result
+
+
+# Typical catch for each water type, used ONLY when no source described this
+# particular water body. It is a description of the type, not a report from the
+# lake: an angler reading "水库常见鱼种" knows the difference, and the UI labels
+# it as such. Ordered most-typical-first so the capped list stays useful.
+WATER_TYPE_SPECIES: dict[str, tuple[str, ...]] = {
+    "湖泊": ("鲫鱼", "鲤鱼", "草鱼", "鲢鳙"),
+    "水库": ("鲫鱼", "鲤鱼", "鲢鳙", "翘嘴"),
+    "河流": ("鲫鱼", "鲤鱼", "白条", "马口"),
+    "野塘": ("鲫鱼", "鲤鱼", "黑鱼", "黄颡鱼"),
+    "堰塘": ("鲫鱼", "鲤鱼", "黄颡鱼"),
+    "池塘": ("鲫鱼", "鲤鱼", "草鱼"),
+    "溪流": ("马口", "白条", "鲫鱼"),
+    "湿地": ("鲫鱼", "黑鱼", "白条"),
+}
+# Words that may appear inside a water_type string ("天然湖泊" / "小型水库").
+_WATER_TYPE_KEYS = tuple(WATER_TYPE_SPECIES)
+
+
+def typical_species_for(water_type: str, limit: int = DEFAULT_MAX_SPECIES) -> list[str]:
+    """Species typical of a water *type*, for when nothing described this lake.
+
+    Returns an empty list when the type is unknown: guessing for an unlabelled
+    water body would be worse than saying nothing.
+    """
+    text = (water_type or "").strip()
+    if not text:
+        return []
+    for key in _WATER_TYPE_KEYS:
+        if key in text:
+            return normalize_species(WATER_TYPE_SPECIES[key], limit=limit)
+    return []

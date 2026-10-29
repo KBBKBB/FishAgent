@@ -1661,11 +1661,17 @@
       return;
     }
     node.removeAttribute('data-empty');
+    // 同类水域推导出来的结果不是"某条帖子说这里有鱼"，视觉上要能看出来，
+    // 否则用户会以为我们查到了这个湖的实情。
+    var typical = result.source === 'typical';
+    node.setAttribute('data-typical', typical ? 'true' : 'false');
     node.append(el('span', 'spot-species-label', '推荐鱼种：'));
     node.append(document.createTextNode(species.join('、')));
     // Provider-agnostic fallback: the backend decides the source wording.
     var label = result.source_label || '网络公开信息';
-    node.append(el('span', 'spot-species-source', '来源：' + label + ' · 仅供参考'));
+    node.append(
+      el('span', 'spot-species-source', (typical ? '参考：' : '来源：') + label + ' · 仅供参考')
+    );
   }
 
   function appendChatMessage(role, text, options) {

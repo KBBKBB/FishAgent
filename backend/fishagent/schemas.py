@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field, field_validator
 Impact = Literal["positive", "neutral", "negative"]
 AlertLevel = Literal["danger", "warning", "info"]
 EntryPrecision = Literal["entr_location", "center_fallback"]
-SpeciesSource = Literal["xiaohongshu", "bing", "none"]
+# ``typical`` is not a cited source: it means the list was derived from the
+# water *type* because nothing described this specific water body. Callers need
+# to distinguish it from ``bing``/``xiaohongshu`` to word the note honestly.
+SpeciesSource = Literal["xiaohongshu", "bing", "typical", "none"]
 
 
 class LatLon(BaseModel):

@@ -1230,6 +1230,16 @@ h3 {
   color: var(--ink-soft);
 }
 
+/* 由水域类型推导的参考值：不是该水域的实测/网友报告，弱化呈现，
+   与"查到了具体来源"的结果区分开。 */
+.spot-species[data-typical="true"] {
+  color: var(--ink-soft);
+}
+
+.spot-species[data-typical="true"] .spot-species-label {
+  color: var(--ink-soft);
+}
+
 .precision-warn {
   margin-top: 8px;
   padding: 6px 9px;

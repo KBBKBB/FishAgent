@@ -21,6 +21,8 @@ from fishagent.services.species import (
     EMPTY_NOTE,
     FOUND_NOTE,
     SOURCE_DISCLOSURE,
+    TYPICAL_NOTE,
+    TYPICAL_SOURCE_LABEL,
     reset_species_cache,
 )
 
@@ -80,13 +82,18 @@ def test_batch_contract_and_input_order(client):
         assert set(item) == RESULT_KEYS
         assert isinstance(item["has_recommendation"], bool)
         assert isinstance(item["species"], list)
-        assert item["source"] in ("xiaohongshu", "none")
+        assert item["source"] in ("xiaohongshu", "typical", "none")
         assert set(item["species"]) <= set(KNOWN_SPECIES)
-        if item["has_recommendation"]:
+        if item["has_recommendation"] and item["source"] == "xiaohongshu":
             assert item["species"]
-            assert item["source"] == "xiaohongshu"
             assert item["source_label"]
             assert item["note"] == FOUND_NOTE
+        elif item["has_recommendation"]:
+            # 同水域类型的参考值：不是引用来源，文案必须说清楚。
+            assert item["source"] == "typical"
+            assert item["species"]
+            assert item["source_label"] == TYPICAL_SOURCE_LABEL
+            assert item["note"] == TYPICAL_NOTE
         else:
             assert item["species"] == []
             assert item["source"] == "none"
@@ -924,3 +931,212 @@ def test_species_provider_selection_includes_bing():
         assert isinstance(provider, BingSpeciesProvider)
     finally:
         deps_mod.get_settings = original
+
+
+# --- 同一水域类型的参考值（无引用来源时的保底）-------------------------------
+
+
+class _EmptyAnswerProvider:
+    """Looks up, finds nothing: this is "not found", unlike the null provider."""
+
+    name = "bing"
+    source_key = "bing"
+    source_label = "Bing 搜索"
+    found_note = "来自 Bing 搜索结果，仅供参考"
+    source_disclosure = "鱼种信息来自公开搜索结果，仅供参考。"
+    resolves_empty = True
+
+    async def find_species(self, spots):
+        return [[] for _ in spots]
+
+
+def test_empty_lookup_falls_back_to_the_water_type(client, override_provider):
+    """A real lookup that found nothing still gives the user something usable."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某个没查到的水库", "water_type": "水库"}]
+    ).json()
+    item = payload["results"][0]
+
+    assert item["species"], "should offer the water-type species"
+    assert item["has_recommendation"] is True
+    assert item["source"] == "typical"
+    assert item["source_label"] == TYPICAL_SOURCE_LABEL
+    assert item["note"] == TYPICAL_NOTE
+    assert set(item["species"]) <= set(KNOWN_SPECIES)
+
+
+def test_typical_value_is_labelled_as_not_about_this_lake(client, override_provider):
+    """The wording must not let a water-type guess pass as a report."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+    note = payload["results"][0]["note"]
+
+    assert "未查到该水域" in note
+    assert "同类水域" in note
+    # Never claim it is a community or search report.
+    assert "网友" not in note
+    assert "搜索" not in note
+
+
+def test_disabled_provider_does_not_invent_species(client, override_provider):
+    """NullSpeciesProvider means "switched off", not "nothing found".
+
+    Regression: without this distinction every spot whose species lookup was
+    disabled would show a plausible-looking list, claiming knowledge the
+    deployment deliberately does not have.
+    """
+    override_provider(NullSpeciesProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+    item = payload["results"][0]
+
+    assert item["species"] == []
+    assert item["has_recommendation"] is False
+    assert item["source"] == "none"
+    assert item["note"] == EMPTY_NOTE
+
+
+def test_degraded_response_does_not_fall_back(client, override_provider):
+    """Degraded means the source failed; a fallback would imply we had checked."""
+
+    class _Boom:
+        name = "bing"
+        source_label = "Bing 搜索"
+        resolves_empty = True
+
+        async def find_species(self, spots):
+            raise RuntimeError("upstream down")
+
+    override_provider(_Boom())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某湖", "water_type": "湖泊"}]
+    ).json()
+
+    assert payload["degraded"] is True
+    assert payload["results"][0]["species"] == []
+    assert payload["results"][0]["source"] == "none"
+
+
+def test_unknown_water_type_gets_no_fallback(client, override_provider):
+    """Guessing for an unlabelled water body would be worse than saying nothing."""
+    override_provider(_EmptyAnswerProvider())
+    payload = request_species(
+        client, [{"spot_id": "s1", "name": "某处", "water_type": ""}]
+    ).json()
+    item = payload["results"][0]
+    assert item["species"] == []
+    assert item["source"] == "none"
+
+
+@pytest.mark.parametrize(
+    ("water_type", "expected"),
+    [
+        ("水库", "鲢鳙"),
+        ("天然湖泊", "草鱼"),
+        ("小型野塘", "黑鱼"),
+        ("河流", "白条"),
+        ("", None),
+        ("冰面", None),
+    ],
+)
+def test_typical_species_by_water_type(water_type, expected):
+    from fishagent.core.species import typical_species_for
+
+    result = typical_species_for(water_type)
+    if expected is None:
+        assert result == []
+    else:
+        assert expected in result
+        assert len(result) == 4
+
+
+# --- Bing 查询式与退化检测 ---------------------------------------------------
+
+
+def test_bing_queries_the_place_name_alone():
+    """Regression: "{name} 钓鱼" put every query on Bing's broken path.
+
+    Measured 2026-10-29: appending any second Chinese term makes cn.bing answer
+    with a single-character dictionary entry (三 sān 是汉语通用汉字) instead of
+    the lake. The bare name returns the actual water body.
+    """
+    from fishagent.providers.species_bing import _QUERY_TEMPLATE
+
+    assert "钓鱼" not in _QUERY_TEMPLATE
+    assert "{" not in _QUERY_TEMPLATE.replace("{name}", "", 1)
+    assert _QUERY_TEMPLATE.format(name="三岔湖") == "三岔湖"
+
+
+def _headline_page(headlines):
+    return "".join(f"<h2><a>{text}</a></h2>" for text in headlines)
+
+
+def test_dictionary_fallback_page_is_detected():
+    """The dictionary SERP must be recognised so the log says what happened."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    degraded = [
+        "三（汉语汉字）_百度百科",
+        "3（阿拉伯数字之一）_百度百科",
+        "三 sān - 汉典",
+        "三 的意思, 三 的解释 -汉语国学",
+        "三 -字典-意思-解释-拼音",
+        "三 怎么读_ 三 的拼音 - 新华字典",
+        "三 - 维基词典，自由的多语言词典",
+        "成都天气_天气预报",
+        "三岔湖门票_携程",
+        "成都旅游攻略",
+    ]
+    assert provider._looks_degraded(provider._extract_headlines(_headline_page(degraded)))
+
+
+def test_healthy_results_are_not_flagged_as_degraded():
+    """A real result set must never be mistaken for the fallback page."""
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+    healthy = [
+        "三岔湖 景区_百度百科",
+        "资阳 三岔湖 景区_百度百科",
+        "三岔湖 - 天府明珠 生态仙境",
+        "三岔湖钓鱼攻略 - 简书",
+        "成都三岔湖钓鱼，一钓就上瘾 - 哔哩哔哩",
+        "简阳三岔湖钓鱼攻略及须知 - 成都本地宝",
+        "请教三岔湖钓鱼位置 - 百度贴吧",
+        "三岔湖水库鱼情 - 钓鱼之家",
+        "四川三岔湖旅游攻略",
+        "三岔湖环湖绿道",
+    ]
+    assert not provider._looks_degraded(provider._extract_headlines(_headline_page(healthy)))
+
+
+def test_degraded_serp_yields_no_species_instead_of_noise():
+    """End to end: a dictionary page must not be mined for species."""
+
+    class _Reply:
+        status_code = 200
+        text = _headline_page(
+            [
+                "三（汉语汉字）_百度百科",
+                "3（阿拉伯数字之一）_百度百科",
+                "三 sān - 汉典",
+                "三 -字典-意思-解释-拼音",
+            ]
+        )
+        encoding = "utf-8"
+
+    from fishagent.providers.species_bing import BingSpeciesProvider
+
+    provider = BingSpeciesProvider()
+
+    class _Client:
+        async def get(self, url):
+            return _Reply()
+
+    found = asyncio.run(provider._search(_Client(), SpotSpeciesQuery(name="三岔湖")))
+    assert found == ([], [])

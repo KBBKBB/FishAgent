@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from fishagent.config import get_settings
-from fishagent.core.species import normalize_species
+from fishagent.core.species import normalize_species, typical_species_for
 from fishagent.providers.base import SpeciesProvider
 from fishagent.schemas import (
     SpeciesRecommendationResponse,
@@ -25,6 +25,12 @@ SOURCE_DISCLOSURE = (
 )
 FOUND_NOTE = "来自小红书网友分享，仅供参考"
 EMPTY_NOTE = "暂无相关鱼种推荐"
+# Used when the cited source had nothing for this water body and the list comes
+# from the water *type* instead. The wording has to make that obvious: these are
+# not reports from this lake, and presenting them as if they were would be the
+# same kind of dishonesty as answering "unsupported format" for a timeout.
+TYPICAL_NOTE = "未查到该水域的具体鱼种，以下为同类水域常见鱼种，仅供参考"
+TYPICAL_SOURCE_LABEL = "同类水域常见鱼种"
 # Providers may override presentation; these match the Xiaohongshu contract.
 _DEFAULT_SOURCE_KEY = "xiaohongshu"
 _EMPTY_CACHE_TTL_SECONDS = 300
@@ -227,16 +233,56 @@ async def build_species_recommendations(
     for spot, key in zip(spots, keys):
         # Degraded responses are all-empty by contract: never surface cache hits.
         species = [] if degraded else resolved.get(key, [])
-        has_recommendation = bool(species)
+        if species:
+            results.append(
+                SpotSpeciesResult(
+                    spot_id=spot.spot_id,
+                    spot_name=spot.name,
+                    species=species,
+                    has_recommendation=True,
+                    source=source_key,
+                    source_label=provider.source_label,
+                    note=found_note,
+                )
+            )
+            continue
+
+        # Nothing cited this water body. Two cases must NOT get a fallback:
+        # degraded means the source itself failed, so offering anything would
+        # imply we had checked; and a provider that never looks up (the null
+        # provider, i.e. the feature is switched off) is not a "not found".
+        provides_answers = getattr(provider, "resolves_empty", True)
+        fallback = (
+            []
+            if degraded or not provides_answers
+            else typical_species_for(spot.water_type)
+        )
+        if fallback:
+            results.append(
+                SpotSpeciesResult(
+                    spot_id=spot.spot_id,
+                    spot_name=spot.name,
+                    species=fallback,
+                    # has_recommendation stays True: there is something to show.
+                    # ``source`` distinguishes it from a cited recommendation,
+                    # so a caller can tell the two apart without string matching.
+                    has_recommendation=True,
+                    source="typical",
+                    source_label=TYPICAL_SOURCE_LABEL,
+                    note=TYPICAL_NOTE,
+                )
+            )
+            continue
+
         results.append(
             SpotSpeciesResult(
                 spot_id=spot.spot_id,
                 spot_name=spot.name,
-                species=species,
-                has_recommendation=has_recommendation,
-                source=source_key if has_recommendation else "none",
-                source_label=provider.source_label if has_recommendation else "",
-                note=found_note if has_recommendation else EMPTY_NOTE,
+                species=[],
+                has_recommendation=False,
+                source="none",
+                source_label="",
+                note=EMPTY_NOTE,
             )
         )
 

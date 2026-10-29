@@ -26,9 +26,33 @@ from fishagent.schemas import SpotSpeciesQuery
 
 logger = logging.getLogger(__name__)
 
-# cn.bing ignores the site: operator for xiaohongshu and is noise-prone on long
-# multi-term queries; two-term "{name} 钓鱼" queries gave the best signal in PoC.
-_QUERY_TEMPLATE = "{name} 钓鱼"
+# Query the place name ALONE, never "{name} 钓鱼".
+#
+# Measured 2026-10-29: as soon as a second Chinese term is appended, cn.bing
+# stops matching the water body and falls back to a dictionary entry for the
+# first character — "三岔湖 钓鱼" returns 三（拼音：sān）是汉语一级通用汉字,
+# and so do 三岔湖 鱼 / 渔获 / 钓鱼攻略 / "三岔湖 钓鱼" / 三岔湖 钓鱼 -汉字.
+# The bare name returns the actual 景区 page, the lake's own site and local
+# articles, and the pages behind them do mention species. The old template put
+# every single query on the one path that is guaranteed to return nothing.
+_QUERY_TEMPLATE = "{name}"
+# Bing's degradation is identifiable, so it can be logged as a specific cause
+# instead of looking like "this lake has no fish".
+#
+# Judged from the result TITLES, not the snippets. Measured 2026-10-29: on a
+# degraded query 8 of 10 headlines are dictionary entries ("三（汉语汉字）_百度
+# 百科", "3（阿拉伯数字之一）_百度百科"), consistently across repeats, while a
+# healthy query has none. The snippet paragraphs carried only 2-4 of 16 and
+# varied between requests, which is too noisy to threshold on.
+_DEGRADED_MARKERS = (
+    "汉语汉字",
+    "阿拉伯数字",
+    "汉典",
+    "汉语国学",
+    "新华字典",
+    "维基词典",
+    "字典",
+)
 _MAX_RESULTS = 8
 # Phase 2 budget: page fetches and LLM calls are the expensive part, so they are
 # capped per request rather than per spot. Fetches are concurrent, so allowing
@@ -56,6 +80,7 @@ _USER_AGENT = (
 _RESULT_BLOCK_RE = re.compile(r'<li class="b_algo".*?</li>', re.DOTALL)
 _TITLE_RE = re.compile(r"<a[^>]*>(.*?)</a>", re.DOTALL)
 _SNIPPET_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.DOTALL)
+_HEADLINE_RE = re.compile(r"<h2[^>]*>(.*?)</h2>", re.DOTALL)
 _HREF_RE = re.compile(r'<a[^>]*href="(https?://[^"]+)"', re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -104,6 +129,9 @@ class BingSpeciesProvider:
     name = "bing"
     source_key = "bing"
     source_label = "Bing 搜索"
+    # It does query, so an empty result is a real answer about this water body
+    # (even when the SERP degraded) and a water-type fallback is justified.
+    resolves_empty = True
     found_note = "来自 Bing 搜索结果，仅供参考"
     source_disclosure = (
         "鱼种信息来自公开搜索结果，仅供参考，不承诺渔获；请出发前自行核实。"
@@ -210,8 +238,44 @@ class BingSpeciesProvider:
             logger.warning("bing species captcha hit for %r", name)
             return None
 
-        hits = self._match_species(self._extract_snippets(response.text))
+        snippets = self._extract_snippets(response.text)
+        if self._looks_degraded(self._extract_headlines(response.text)):
+            # Logged as its own cause: this is Bing failing to match the place
+            # name, not a water body without any fish. Without the distinction
+            # an outage is indistinguishable from a real empty result.
+            logger.warning(
+                "bing returned dictionary entries instead of results for %r "
+                "(degraded SERP); the place name was not matched",
+                name,
+            )
+            return [], []
+
+        hits = self._match_species(snippets)
         return hits, self._extract_result_urls(response.text)
+
+    def _extract_headlines(self, html: str) -> list[str]:
+        """Result titles; used to spot the dictionary fallback page."""
+        return [
+            " ".join(_TAG_RE.sub(" ", raw).split())
+            for raw in _HEADLINE_RE.findall(html)[: self._max_results + 2]
+        ]
+
+    def _looks_degraded(self, headlines: list[str]) -> bool:
+        """Detect Bing's dictionary fallback page from the result titles.
+
+        Bing stops matching the place name and answers with single-character
+        dictionary entries for its first character. On a degraded query most
+        headlines are dictionary entries; on a healthy one none are. Half the
+        headlines is a wide margin either way.
+        """
+        if not headlines:
+            return False
+        marked = sum(
+            1
+            for text in headlines
+            if any(marker in text for marker in _DEGRADED_MARKERS)
+        )
+        return marked >= 2 and marked * 2 >= len(headlines)
 
     async def _lookup_one(self, client: httpx.AsyncClient, spot: SpotSpeciesQuery) -> list[str]:
         """Single-spot lookup with a full budget; convenience wrapper for tests."""

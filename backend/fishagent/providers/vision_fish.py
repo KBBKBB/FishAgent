@@ -91,7 +91,12 @@ class VisionFish:
 
 
 class VisionFishIdentifier:
-    """Wraps an AsyncOpenAI client; returns ``None`` whenever unsure or failing."""
+    """Wraps an AsyncOpenAI client to turn a photo into a species guess.
+
+    An unsure answer comes back as ``None``. A failure raises
+    ``VisionUnavailable`` carrying the reason, so the endpoint can tell the
+    user *why* nothing was identified instead of blaming the photo.
+    """
 
     def __init__(
         self,

@@ -58,17 +58,6 @@
     <button type="button" class="hint-close" id="ios-install-close" aria-label="关闭安装提示">×</button>
   </div>
 
-  <!-- Shown when the server reports a newer build than the one this page is
-       running. Reloading is the user's call, never automatic: the page holds
-       form input, a selected catch photo and the conversation in memory only,
-       so a silent reload would throw work away. -->
-  <div class="wrap update-banner" id="update-banner" role="status" aria-live="polite" hidden>
-    <span class="update-dot" aria-hidden="true"></span>
-    <span class="update-copy">FishAgent 有新版本可用。</span>
-    <button type="button" class="update-reload" id="update-reload-btn">立即更新</button>
-    <button type="button" class="hint-close update-dismiss" id="update-dismiss-btn" aria-label="稍后再说">×</button>
-  </div>
-
   <div class="wrap status-region" id="status-region" role="status" aria-live="polite" hidden></div>
 
   <main class="wrap layout" id="main">
@@ -219,6 +208,22 @@
       <p class="footer-meta">坐标系统 WGS84 · 导航由高德地图提供服务 · 页面不包含任何 API Key</p>
     </div>
   </footer>
+
+  <!-- Shown when the server reports a newer build than the one this page is
+       running. Reloading is the user's call, never automatic: the page holds
+       form input, a selected catch photo and the conversation in memory only,
+       so a silent reload would throw work away.
+
+       Pinned to the bottom of the viewport rather than placed in the page.
+       A deploy lands while the reader may be scrolled down to Step 3 or the
+       chat, and a notice at the top of the document is then thousands of
+       pixels above the screen -- shown, but never seen. -->
+  <div class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
+    <span class="update-dot" aria-hidden="true"></span>
+    <span class="update-copy">FishAgent 有新版本可用。</span>
+    <button type="button" class="update-reload" id="update-reload-btn">立即更新</button>
+    <button type="button" class="hint-close update-dismiss" id="update-dismiss-btn" aria-label="稍后再说">×</button>
+  </div>
 
   <script src="./app.js"></script>
 </body>

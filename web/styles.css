@@ -348,16 +348,27 @@ a {
 /* Update banner. Deliberately calm: this is an offer, not an error, and it
    should not compete with the fish-activity result for attention. */
 .update-banner {
-  position: relative;
+  /* Pinned to the bottom of the viewport, not placed in the page. A deploy
+     lands at an arbitrary moment -- on a phone the reader is usually scrolled
+     well past the top by then, so a notice in the document flow sits far above
+     the visible area and is never actually seen. */
+  position: fixed;
+  left: 50%;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 90;
+  box-sizing: border-box;
+  width: min(1180px, calc(100% - 32px));
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 14px;
   padding: 10px 42px 10px 14px;
   border: 1px solid #bfe3d2;
   border-radius: var(--radius-md);
   color: var(--brand-ink);
   background: var(--brand-soft);
+  /* Opaque enough to read over a spot card scrolling underneath it. */
+  box-shadow: 0 8px 24px rgba(8, 64, 51, 0.18);
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.5;
@@ -365,6 +376,13 @@ a {
 
 .update-banner[hidden] {
   display: none;
+}
+
+/* While the banner is up it covers the last strip of the page. Reserve that
+   much space so the footer (and the chat input on a phone) can still be
+   scrolled clear of it instead of hiding underneath. */
+body.has-update-banner {
+  padding-bottom: 76px;
 }
 
 .update-dot {

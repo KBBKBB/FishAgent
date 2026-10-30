@@ -882,6 +882,15 @@
     return value;
   }
 
+  function setUpdateBannerVisible(visible) {
+    var banner = $('update-banner');
+    if (!banner) return;
+    banner.hidden = !visible;
+    // The banner is fixed over the bottom of the viewport, so lift the page
+    // content clear of it while it is up.
+    document.body.classList.toggle('has-update-banner', visible);
+  }
+
   function showUpdateBanner(serverBuild) {
     var banner = $('update-banner');
     if (!banner) return;
@@ -889,10 +898,10 @@
     // Stay hidden if the user already said "later" for this exact build; a
     // banner that keeps coming back after being dismissed is just noise.
     if (state.updateDismissedBuild === serverBuild) {
-      banner.hidden = true;
+      setUpdateBannerVisible(false);
       return;
     }
-    banner.hidden = false;
+    setUpdateBannerVisible(true);
   }
 
   function checkForUpdate() {
@@ -2515,7 +2524,7 @@
     });
     $('update-dismiss-btn').addEventListener('click', function () {
       state.updateDismissedBuild = state.updateSeenBuild;
-      $('update-banner').hidden = true;
+      setUpdateBannerVisible(false);
     });
     $('radius-select').addEventListener('change', handleRadiusChange);
     $('spots-refresh').addEventListener('click', handleSpotsRefresh);

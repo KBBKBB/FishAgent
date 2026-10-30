@@ -182,7 +182,29 @@ def test_update_is_offered_not_forced():
     end = app_js.index("function checkForUpdate", start)
     body = app_js[start:end]
     assert "reload" not in body, "提示逻辑不得直接刷新页面"
-    assert "hidden = false" in body
+    # How the banner is revealed is an implementation detail; that it is revealed
+    # when the server build differs is not.
+    assert "setUpdateBannerVisible(true)" in body
+
+
+def test_update_banner_is_visible_wherever_the_reader_has_scrolled():
+    """提示条必须贴在视口上，不能放在文档流顶部。
+
+    部署发生在任意时刻，手机上用户通常早已滚到 Step 3 或对话区。放在文档
+    顶部的提示条会被截在视口上方一两千像素处——元素"显示了"，但没人看得见。
+    """
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setUpdateBannerVisible" in app_js, (
+        "banner 的显隐要收在一处，否则固定定位需要的 body 留白会漏掉"
+    )
+
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    start = css.index(".update-banner {")
+    body = css[start : css.index("}", start)]
+    assert "position: fixed" in body, "提示条必须脱离文档流固定在视口上"
+
+    index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert "has-update-banner" not in index_html, "留白类应由脚本按显隐切换添加"
 
 
 def test_update_dismissal_is_per_build():

@@ -22,6 +22,7 @@
 > v2.7b（2026-10-30）：新增 `scripts/start-fishagent.vbs` 并装入 Windows 启动文件夹，登录后自动以隐藏方式拉起服务；仓库搬家需同步更新 `D:\FishAgent\repo-root.txt`。接口不变。
 > v2.7c（2026-10-30）：8018 与开机自启改回**明文 HTTP**（`serve.bat`）。手机端因此没有定位与 Service Worker，页面如实提示；`serve-https.bat` 保留备用。接口不变。
 > v2.8（2026-10-30）：新增 4.8 静态资源缓存与版本提示。shell 资源改 `no-cache`，`/health` 增加内容哈希 `build` 字段并注入 `index.html`，页面轮询发现新版本后提示、由用户自己点刷新。`/health` 响应新增 `build`（向后兼容的增量字段）。
+> v2.9（2026-10-30）：钓位推荐不再总是「离你最近的几个」——评估池按方向扇区 × 距离环取样，分页前做间距交错，同名水体先去重；`meta` 增加 `selection_strategy` / `min_separation_m` / `separation_relaxed` 三个增量字段。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -277,8 +278,12 @@ fixtures/                         # 小产：演示场景
 - 排序：`total_score` 降序；同分按往返时长升序。`drive_seconds_out/back/round_trip` 均为整数秒；`drive_minutes_one_way = round_half_up(drive_seconds_out / 60)`（四舍五入到整数分钟）。
 - 往返均超过 2h 的候选不得出现在 `spots`，仅计入 `filtered.over_two_hours`。
 - **真实模式召回口径**：高德 around 使用 `types=190204|190205`（自然地名-河流/湖泊）、`sortrule=distance`、`extensions=all`；只保留 `typecode` 为 190204/190205 的水体，`110202` 仅在名称含湖/河/江/溪等水体词时保留。餐饮、住宅、学校、商场、KTV、道路以及经营部/商行/公司/工厂/建材/沙石/五金/超市/商店/门市/批发/经销/商贸等商业 POI 一律排除。
+- **同名水体先去重**（2026-10-30）：高德把一条河拆成多个 POI（`府河`、`府河(锦江)`、`锦江`），若不去重，一页会出现三张都叫「府河」的卡片，等于没有选择。去重在**评估之前**对候选池做，比较时剥掉括号与空格；这样既不会把配额浪费在同一个水域上，也不会出现"测了三条同名河、只剩一条能进页面"。实测成都 50km 首屏原本 5 张里有 3 张同名。
 - **真实模式评估口径**：候选先按直线距离排序；对最近 ≤100 个候选调用一次高德 `/v3/distance`（单终点、最多 100 起点）按回程时长重排；随后按批次（默认 `max(limit, 10)`，评估上限 30 个候选）对入围候选做去/回程分别路径精算，凑够 `offset+limit` 个合格候选即停（`offset+limit ≤ 30`）。批量距离仅用于排序，不替代去/回程精算；回程/去程值在基线路况下可能相同，但始终各调用一次。`unavailable` 表示路径规划失败，保守排除。
-- **分页口径**：按 `total_score` 降序（同分按往返时长升序）排序后返回 `eligible[offset:offset+limit]`；`offset=0` 与旧版首屏一致。每次请求重新召回、评估并排序，不做缓存；因此两次请求之间若路况/天气变化，批次内容可能变化，仅保证单次响应内无重复。
+- **评估池不只看最近的**（2026-10-30）：若直接取距离最近的一批来评估，远一点但更好的钓位永远没被测量过，页面只会反映用户脚下那一小圈。因此评估池会按**方向扇区 × 距离环**取样（`_sector_balanced_pool` / `_interleave_sectors`），下限 30 个、按评估批量向上取整。注意只按扇区平衡**不够**：每个扇区取到的仍是"该方向最近的几个"，而城市周边最近的点天然围成一圈——实测按扇区平衡后 150km 搜出 1246 个候选，评价完的 28 个仍全在 11km 内。距离环必须一起轮转。
+- **散布与成本的取舍（实测记录）**：把评估池放大到 40、按距离环铺满 150km，在成都实测要 **3 倍**路径调用（10 → 30 次）却只返回 8 个钓位（因为远环大量超 2 小时），属于"花三倍代价拿更少结果"，已放弃。当前策略保持池深 30 与旧版一致，仅改变**取谁**：默认 50km 首屏的散布从 1.1–5.5km 提升到 1.1–10.8km，评估次数不变。150km 档因为要够到远处会用到 30 次上限。
+- **分页口径**：先对**全部**合格候选按间距规则交错排序（`_interleave_by_spacing`），再切片 `[offset:offset+limit]`。交错只决定"谁进这一页"，页内仍按 `total_score` 降序，卡片顺序仍承诺"最好的在前"。若先切页再散布，页大小之外没有可选余地，且第 2 页可能重复第 1 页的钓位。每次请求重新召回、评估并排序，不做缓存；因此两次请求之间若路况/天气变化，批次内容可能变化，仅保证单次响应内无重复。
+- **散布字段**：`meta.selection_strategy`（当前固定 `sector_greedy_spacing`）、`meta.min_separation_m`（这一页**实际达成**的最小两两间距，不是目标值）、`meta.separation_relaxed`（目标间距达不到、已逐步放宽）。目标间距随搜索半径缩放，夹在 3–25km。
 - `truncated_by_limit = eligible - returned` 涵盖 `offset` 前被跳过的合格候选与窗口外剩余候选；`eligible = returned + truncated_by_limit` 不变式继续成立。`forbidden=0` 仅为未命中规则的事实字段，不代表“均可钓”。
 - **有界并发与限速**：召回分片与路径规划共享并发信号量（`FISHAGENT_AMAP_CONCURRENCY`，默认 6）与请求起间隔（`FISHAGENT_AMAP_QPS`，默认 2）；Mock 不受影响。**QPS=2 是高德账号的硬限制**，实测调高会返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`，因此提高并发数对总耗时无效（实测 6/12/20 并发均为 14s 量级）。
 - **去程/回程只算一次**：真实 `AMapGeoProvider.estimate_drive_seconds` 忽略 `direction` 参数，去程与回程是对同一 origin/destination 的完全相同请求。服务层因此只发一次（`direction_affects_result=False`），往返时间按 2 倍展示。Mock 区分去/回程（`_TRAVEL_FACTORS`），故保留两次调用。
@@ -566,3 +571,4 @@ cd backend
 | v2.7b | 2026-10-30 | 新增 `scripts/start-fishagent.vbs` 并放入启动文件夹（无窗口、重复启动自动跳过、日志落 `D:\FishAgent\logs`） | 主机重启后手工起服务会退回明文访问或干脆没起，定位与 PWA 又失效；`.bat` 放启动项会常驻命令行窗口 |
 | v2.7c | 2026-10-30 | **回退 v2.7**：8018 与开机自启改回明文 HTTP（新增 `serve.bat`，VBS 用 `Const BAT_NAME` 切换）。接受手机端无定位、无 SW；`serve-https.bat` 保留备用。接口不变 | 真机装 mkcert CA 的门槛、以及证书按 IP 签发导致换地址就要重签，比换回来的定位与 PWA 更麻烦；页面已能如实说明限制，不再把协议问题说成权限问题 |
 | v2.8 | 2026-10-30 | shell 资源加 `Cache-Control: no-cache`；`/health` 增加内容哈希 `build` 并注入 `index.html`；页面轮询发现新版后显示提示条，由用户点「立即更新」 | 静态响应原本不带 `Cache-Control`，浏览器按启发式新鲜度自行缓存，旧 `app.js` 可能几小时不回源，**刷新也拿不到新版**；手机端没有 SW 兜底，只能靠 HTTP 缓存策略 |
+| v2.9 | 2026-10-30 | 钓位推荐改为「扇区 × 距离环」取样评估池 + 间距交错分页 + 同名水体去重；`meta` 新增 `selection_strategy` / `min_separation_m` / `separation_relaxed` | 实测成都 80km 搜出 448 个候选，返回的 5 个全在 7.7km 内、鱼情分全是 81（排序实际等价于「最近的几个」）；另有一页 5 张卡片里 3 张同名「府河」，用户无从区分 |

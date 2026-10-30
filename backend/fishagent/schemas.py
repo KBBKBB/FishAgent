@@ -200,6 +200,13 @@ class SpotsMeta(BaseModel):
     round_trip_limit_seconds: int
     traffic_basis: str
     generated_at: str
+    # How the returned set was spread out. Reported so a clustered-looking
+    # result can be told apart from a strategy that did not run: min_separation_m
+    # is the distance finally enforced, and separation_relaxed says the
+    # requested spread could not be met and had to be widened.
+    selection_strategy: str = "score"
+    min_separation_m: int = 0
+    separation_relaxed: bool = False
 
 
 class SpotRecommendationResponse(BaseModel):

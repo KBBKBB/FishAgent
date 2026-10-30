@@ -1467,6 +1467,45 @@ h3 {
   color: var(--ink-soft);
 }
 
+/* Bait plan, directly under the species it belongs to. Slightly indented so
+   the two read as one block rather than two unrelated facts. */
+.spot-bait {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--brand-soft);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.spot-bait[hidden] {
+  display: none;
+}
+
+.spot-bait-label {
+  display: block;
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+
+.spot-bait-species {
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+
+.spot-bait-generic {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.spot-bait-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
 /* 由水域类型推导的参考值：不是该水域的实测/网友报告，弱化呈现，
    与"查到了具体来源"的结果区分开。 */
 .spot-species[data-typical="true"] {

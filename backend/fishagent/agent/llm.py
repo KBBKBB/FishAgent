@@ -10,43 +10,46 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from fishagent.core.bait import GENERIC_BAIT, advice_for
+from fishagent.core.species import canonical_species
+
 logger = logging.getLogger(__name__)
 
 AI_DISCLOSURE = "本内容由 AI 生成，仅供参考，不承诺渔获。"
 
+# Species the *activity calculator* supports: its rules are tuned per species,
+# so a name outside this list has no scoring model behind it.
 ALLOWED_SPECIES = ("鲫鱼", "鲤鱼", "草鱼", "鲢鳙")
-SPECIES_ALIASES = (
-    ("鲫鱼", "鲫鱼"),
-    ("鲤鱼", "鲤鱼"),
-    ("草鱼", "草鱼"),
-    ("鲢鳙", "鲢鳙"),
-    ("胖头鱼", "鲢鳙"),
-    ("胖头", "鲢鳙"),
-    ("花鲢", "鲢鳙"),
-    ("鲫", "鲫鱼"),
-    ("鲤", "鲤鱼"),
-)
 
 INTENT_PATTERNS = {
     "fish": re.compile(r"气压|鱼情|鱼口|适合钓|能钓|好钓|活跃|天气|出钓|评分|开口|鱼获"),
     "time": re.compile(r"几点|时段|明早|早上|清晨|傍晚|什么时候|最佳时间|窗口"),
     "spots": re.compile(r"附近|哪里|钓位|钓点|野钓|推荐|车程|水库|湖泊|野塘|河流|钓场"),
+    # Bait questions were reaching the guide reply because none of the three
+    # patterns above matches "用什么饵料". Left alone, asking about bait looked
+    # broken -- the more so because it *sometimes* worked: 鲫鱼 (one of the four
+    # activity species) borrowed the fish intent, while 白条, 翘嘴 and 罗非 did
+    # not.
+    "bait": re.compile(
+        r"饵料|饵|窝料|打窝|开饵|味型|用什么钓|怎么钓|钓法|钓组|线组|浮漂|调漂|路亚|鱼钩|钩型"
+    ),
 }
-INTENT_ORDER = ("fish", "time", "spots")
+INTENT_ORDER = ("fish", "time", "spots", "bait")
 
 GUIDE_REPLY = (
-    "我可以帮你分析当前鱼情与气压、推荐附近钓位，或给出最佳出钓时段。"
-    "试试问「今天气压适合钓鱼吗？」「附近哪里野钓好？」「明早几点去最好？」"
+    "我可以帮你分析当前鱼情与气压、推荐附近钓位、给出最佳出钓时段，或提供饵料与钓法建议。"
+    "试试问「今天气压适合钓鱼吗？」「附近哪里野钓好？」「明早几点去最好？」「鲫鱼用什么饵料？」"
 )
 
 INTENT_SYSTEM_PROMPT = (
     "你是 FishAgent 的意图分类器。可选意图："
     "fish=鱼情/气压/鱼口/是否适合钓鱼；"
     "time=最佳出钓时段/几点去；"
-    "spots=附近钓位/钓点/野钓推荐。"
+    "spots=附近钓位/钓点/野钓推荐；"
+    "bait=饵料/窝料/味型/钓法/线组。"
     "可返回多个意图，无匹配返回空数组。只输出 JSON，不要解释："
     '{"intents":["fish"],"species":null}。'
-    "species 仅允许 鲫鱼、鲤鱼、草鱼、鲢鳙；用户未提及时为 null。"
+    "species 必须是常见淡水鱼的中文名，用户未提及时为 null。"
 )
 
 ANSWER_SYSTEM_PROMPT = (
@@ -104,17 +107,15 @@ def classify_intents(message: str) -> list[str]:
 
 
 def normalize_species(value: Any) -> str | None:
+    """Any species name we know, not just the four the calculator supports.
+
+    The agent answers bait and technique questions for the full catalogue, so
+    narrowing here to ``ALLOWED_SPECIES`` would silently drop 白条 and 翘嘴 --
+    the exact names spot cards recommend.
+    """
     if value is None:
         return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text in ALLOWED_SPECIES:
-        return text
-    for token, canonical in SPECIES_ALIASES:
-        if token in text:
-            return canonical
-    return None
+    return canonical_species(str(value))
 
 
 PROMISE_PATTERN = re.compile(r"必上鱼|保证爆护|保证上鱼|包爆护|必爆护|百分百|100%|绝不空军")
@@ -231,13 +232,31 @@ def compose_fallback_reply(
     intents: list[str],
     fish_activity: dict[str, Any] | None,
     spots: dict[str, Any] | None,
+    species: str | None = None,
 ) -> str:
     if not intents:
         return GUIDE_REPLY
 
     wants_fish = "fish" in intents or "time" in intents
     wants_spots = "spots" in intents
+    wants_bait = "bait" in intents
     time_focus = "time" in intents and "fish" not in intents
+
+    # Bait is answerable with no data at all -- it comes from a table, not from
+    # weather -- so it must survive an LLM outage and mock mode alike. It also
+    # composes with the other intents rather than replacing them: someone who
+    # asks "附近哪里钓鲫鱼，用什么饵" wants the spot *and* the bait.
+    if wants_bait:
+        bait_sentences = _bait_sentences(species)
+        if bait_sentences:
+            extra = []
+            if wants_fish:
+                extra.extend(_fish_sentence_texts(fish_activity, time_focus=time_focus))
+            if wants_spots:
+                extra.extend(_spots_sentence_texts(spots))
+            # The bait plan answers the question directly, so it keeps its
+            # sentences and anything else fills the remaining budget.
+            return _limit_sentences("".join(bait_sentences + extra))
 
     fish_sentences: list[tuple[str, bool]] = []
     if wants_fish:
@@ -259,6 +278,53 @@ def compose_fallback_reply(
     if len(sentences) < 2:
         sentences.append("建议结合实时天气和现场情况安排出钓。")
     return _limit_sentences("".join(sentences))
+
+
+def _fish_sentence_texts(
+    fish_activity: dict[str, Any] | None,
+    *,
+    time_focus: bool,
+) -> list[str]:
+    if not isinstance(fish_activity, dict):
+        return ["鱼情数据暂时不可用，请稍后再试。"]
+    return [text for text, _mandatory in _fish_sentences(fish_activity, time_focus=time_focus)]
+
+
+def _spots_sentence_texts(spots: dict[str, Any] | None) -> list[str]:
+    if not isinstance(spots, dict):
+        return ["钓位推荐暂时不可用，请稍后再试。"]
+    return _spots_sentences(spots)
+
+
+def _bait_sentences(species: str | None) -> list[str]:
+    """Bait plan as sentences, or [] when there is no species to talk about.
+
+    An unqualified "what bait should I use" still deserves an answer, so it
+    falls back to the generic plan -- but the wording has to make clear it is
+    generic, not a claim about one fish.
+    """
+    name = canonical_species(species)
+    if name is None:
+        generic = _generic_bait_sentence()
+        return [generic] if generic else []
+
+    advice, is_generic = advice_for(name)
+    if advice is None:
+        return []
+    if not is_generic:
+        return [
+            f"{name}可用{_sentence_body(advice.main)}。",
+            f"窝子：{_sentence_body(advice.nest)}。",
+            f"要点：{_sentence_body(advice.tip)}。",
+        ]
+    generic = _generic_bait_sentence(name)
+    return [generic] if generic else []
+
+
+def _generic_bait_sentence(species: str | None = None) -> str:
+    prefix = f"{species}暂无专属饵料方案，" if species else ""
+    body = _sentence_body(GENERIC_BAIT.main)
+    return f"{prefix}通用做法是用{body}，窝子{_sentence_body(GENERIC_BAIT.nest)}。"
 
 
 def _message_content(response: Any) -> str | None:

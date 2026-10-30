@@ -47,11 +47,33 @@ SPECIES_ALIASES = (
 DEFAULT_MAX_SPECIES = 4
 
 
-def _canonical(value: str) -> str | None:
-    if value in KNOWN_SPECIES:
-        return value
+# Longest first: "鲤鱼" must win over "鲤", and an alias must not be shadowed
+# by a shorter known name that happens to be a substring of it.
+_KNOWN_BY_LENGTH = tuple(sorted(KNOWN_SPECIES, key=len, reverse=True))
+
+
+def canonical_species(value: str | None) -> str | None:
+    """Map any recognised spelling -- or a sentence mentioning one -- to a name.
+
+    Callers pass both bare names ("白条") and whole questions
+    ("白条用什么饵料"), because that is what arrives from the chat box.
+    Substring matching is what makes the second case work: the old agent-side
+    copy only had aliases for 鲫/鲤, so a question about 鲫鱼 matched by accident
+    while 白条, 翘嘴 and 罗非 matched nothing at all and the user got the
+    "I can help with..." guide instead of an answer.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text in KNOWN_SPECIES:
+        return text
+    for name in _KNOWN_BY_LENGTH:
+        if name in text:
+            return name
     for alias, species in SPECIES_ALIASES:
-        if alias in value:
+        if alias in text:
             return species
     return None
 
@@ -67,7 +89,7 @@ def normalize_species(
         text = str(item or "").strip()
         if not text:
             continue
-        species = _canonical(text)
+        species = canonical_species(text)
         if species is None or species in seen:
             continue
         seen.add(species)

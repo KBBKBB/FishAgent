@@ -9,9 +9,11 @@ import time
 from dataclasses import dataclass
 
 from fishagent.config import get_settings
+from fishagent.core.bait import advice_for
 from fishagent.core.species import normalize_species, typical_species_for
 from fishagent.providers.base import SpeciesProvider
 from fishagent.schemas import (
+    BaitSuggestion,
     SpeciesRecommendationResponse,
     SpotSpeciesQuery,
     SpotSpeciesResult,
@@ -106,6 +108,30 @@ def _write_cache(
             expires_at=time.monotonic() + effective_ttl,
             degraded=degraded,
         )
+
+
+def _bait_suggestions(species: list[str]) -> list[BaitSuggestion]:
+    """Bait plans for the species actually shown on the card.
+
+    Derived from ``species`` rather than computed independently so the two can
+    never disagree. Degraded results have no species and therefore no bait --
+    which is the correct answer, not a gap to paper over.
+    """
+    suggestions: list[BaitSuggestion] = []
+    for name in species:
+        advice, is_generic = advice_for(name)
+        if advice is None:
+            continue
+        suggestions.append(
+            BaitSuggestion(
+                species=name,
+                main=advice.main,
+                nest=advice.nest,
+                tip=advice.tip,
+                generic=is_generic,
+            )
+        )
+    return suggestions
 
 
 def _cache_degraded(
@@ -243,6 +269,7 @@ async def build_species_recommendations(
                     source=source_key,
                     source_label=provider.source_label,
                     note=found_note,
+                    baits=_bait_suggestions(species),
                 )
             )
             continue
@@ -270,6 +297,7 @@ async def build_species_recommendations(
                     source="typical",
                     source_label=TYPICAL_SOURCE_LABEL,
                     note=TYPICAL_NOTE,
+                    baits=_bait_suggestions(fallback),
                 )
             )
             continue

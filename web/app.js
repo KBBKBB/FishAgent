@@ -1518,6 +1518,14 @@
     }
     li.append(speciesLine);
 
+    // Bait hangs off the same data as the species line, so it is filled in the
+    // same pass -- see fillBaitLine. Keeping them in separate DOM nodes means a
+    // species update can never leave stale bait underneath.
+    var baitLine = el('p', 'spot-bait');
+    baitLine.setAttribute('data-spot-key', key);
+    baitLine.hidden = true;
+    li.append(baitLine);
+
     if (data.entry_precision === 'center_fallback') {
       li.append(el('p', 'precision-warn', '该钓位缺少入口坐标，已回退至中心点，端点精度较低。'));
     }
@@ -1734,15 +1742,57 @@
         node.removeAttribute('data-empty');
         node.removeAttribute('data-degraded');
         node.textContent = '推荐鱼种：加载中…';
+        fillBaitLine(key, []);
         return;
       }
       node.removeAttribute('data-degraded');
       node.setAttribute('data-empty', 'true');
       node.textContent = '推荐鱼种：暂无相关鱼种推荐';
+      fillBaitLine(key, []);
     });
   }
 
+  // Bait under the species line. Rendered from the same response, so a card
+  // never shows bait for a fish whose species line failed to load.
+  //
+  // Walks the bait nodes rather than querying by key: spot keys contain "|"
+  // and Chinese, and matching those in an attribute selector needs escaping
+  // that is easy to get subtly wrong. Comparing the attribute directly is both
+  // simpler and exact.
+  function fillBaitLine(spotKeyValue, baits) {
+    var nodes = document.querySelectorAll('.spot-bait');
+    Array.prototype.forEach.call(nodes, function (node) {
+      if (node.getAttribute('data-spot-key') !== String(spotKeyValue)) return;
+      renderBaitNode(node, baits);
+    });
+  }
+
+  function renderBaitNode(node, baits) {
+    var list = Array.isArray(baits)
+      ? baits.filter(function (item) { return item && item.main; })
+      : [];
+    node.replaceChildren();
+    if (!list.length) {
+      node.hidden = true;
+      return;
+    }
+    node.hidden = false;
+    node.append(el('span', 'spot-bait-label', '推荐饵料：'));
+    list.forEach(function (item, index) {
+      // One species per line. Run together they become a wall of text --
+      // four plans in a single paragraph is unreadable on a phone.
+      if (index > 0) node.append(document.createElement('br'));
+      node.append(el('span', 'spot-bait-species', String(item.species || '') + '：'));
+      node.append(document.createTextNode(String(item.main)));
+      if (item.generic) node.append(el('span', 'spot-bait-generic', '（通用）'));
+    });
+    node.append(el('span', 'spot-bait-note', '仅供参考，请按现场水情调整'));
+  }
+
   function showSpeciesError(node, message) {
+    // The bait line is a child fact of the species line: if the species failed,
+    // whatever bait was there belongs to a result we are no longer showing.
+    fillBaitLine(node.getAttribute('data-spot-key'), []);
     node.replaceChildren();
     node.removeAttribute('data-degraded');
     node.removeAttribute('data-empty');
@@ -1759,6 +1809,7 @@
       : Array.isArray(result.species)
         ? result.species.filter(Boolean)
         : [];
+    fillBaitLine(node.getAttribute('data-spot-key'), degraded ? [] : result.baits);
     node.replaceChildren();
     node.removeAttribute('data-error');
     if (degraded) {
@@ -2335,6 +2386,9 @@
         state.lat = lat;
         state.lon = lon;
         state.name = '我的位置';
+        // 输入框若还留着上一个地名，用户会以为仍然按那个地点在分析——
+        // 位置已经换成定位点了，输入框必须跟着清空，否则界面自相矛盾。
+        clearPlaceInput();
         syncLocationUI();
         setGeoStatus(accuracy ? '定位成功，精度约 ' + accuracy + ' 米（WGS84）。' : '定位成功（WGS84）。');
         setStatus('已使用你的定位，正在分析鱼情与钓位。', 'info', true);
@@ -2413,6 +2467,17 @@
     if (results) results.hidden = true;
     var nearby = $('nearby-list');
     if (nearby) nearby.hidden = true;
+  }
+
+  // The place box is an input, not a record of the current location -- that is
+  // what the Step 1 summary shows. Once the location changes by any other route
+  // (geolocation, nearby list, coordinates), leaving the old keyword in the box
+  // suggests the analysis is still about it.
+  function clearPlaceInput() {
+    var input = $('place-input');
+    if (input) input.value = '';
+    var label = $('place-results-label');
+    if (label) label.textContent = '搜索结果';
   }
 
   function setPlaceBusy(busy) {

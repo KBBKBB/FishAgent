@@ -1,4 +1,4 @@
-' Start FishAgent over HTTPS without leaving a console window on screen.
+' Start FishAgent on the LAN without leaving a console window on screen.
 '
 ' Placed in the Startup folder, a plain .bat would keep a command prompt open
 ' for as long as the server runs, which is forever. This wrapper runs the real
@@ -8,6 +8,11 @@
 ' It also refuses to start a second copy: two processes cannot bind one port,
 ' and the loser would write a bind error to the log on every login.
 '
+' SERVES PLAIN HTTP. Chosen deliberately, with the cost known: no secure
+' context means no geolocation and no service worker from a phone. Switch
+' BAT_NAME to serve-https.bat (and install the mkcert CA on the phone) to get
+' both back. See docs/cr03-lan-https-runbook.md.
+'
 ' NOTE: the repo path contains CJK characters. This file must stay pure ASCII,
 ' because cscript reads a .vbs in the system ANSI codepage (GBK here) unless it
 ' is UTF-16 -- a UTF-8 file makes the embedded path unmatchable and the script
@@ -16,6 +21,8 @@
 Option Explicit
 
 Const PORT = "8018"
+' serve-https.bat for TLS, serve.bat for plain http.
+Const BAT_NAME = "serve.bat"
 
 Dim shell, fso, root, bat, logDir, logFile, candidate, found
 Set shell = CreateObject("WScript.Shell")
@@ -37,7 +44,7 @@ If Not fso.FolderExists(logDir) Then fso.CreateFolder logDir
 '   3. %FISHAGENT_ROOT%          -- manual override.
 found = ""
 candidate = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
-If fso.FileExists(candidate & "\serve-https.bat") Then found = candidate
+If fso.FileExists(candidate & "\" & BAT_NAME) Then found = candidate
 
 If found = "" Then
   Dim pointer, f, line
@@ -57,7 +64,7 @@ If found = "" Then
       Do While Not f.AtEndOfStream
         line = Trim(f.ReadLine)
         If Len(line) > 0 And Left(line, 1) <> "#" Then
-          If fso.FileExists(line & "\serve-https.bat") Then found = line
+          If fso.FileExists(line & "\" & BAT_NAME) Then found = line
           Exit Do
         End If
       Loop
@@ -70,18 +77,18 @@ If found = "" Then
   candidate = shell.ExpandEnvironmentStrings("%FISHAGENT_ROOT%")
   ' ExpandEnvironmentStrings returns the literal text when unset.
   If InStr(candidate, "%") = 0 Then
-    If fso.FileExists(candidate & "\serve-https.bat") Then found = candidate
+    If fso.FileExists(candidate & "\" & BAT_NAME) Then found = candidate
   End If
 End If
 
 If found = "" Then
-  WriteLine logFile, Now & "  ERROR: serve-https.bat not found. Asked: script parent, " & _
+  WriteLine logFile, Now & "  ERROR: " & BAT_NAME & " not found. Asked: script parent, " & _
     "D:\FishAgent\repo-root.txt, %FISHAGENT_ROOT%."
   WScript.Quit 1
 End If
 
 root = found
-bat = root & "\serve-https.bat"
+bat = root & "\" & BAT_NAME
 logDir = "D:\FishAgent\logs"
 logFile = logDir & "\uvicorn-" & PORT & ".log"
 

@@ -1237,7 +1237,10 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  /* Fill the row rather than hugging the right edge. Wrapping is expected on a
+     narrow screen; pushing the last item to a new line and leaving a gap of
+     dead space beside it is what made the layout look broken. */
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -2116,6 +2119,52 @@ h3 {
 
   .btn {
     padding-inline: 14px;
+  }
+
+  /* Step 3 header on a phone. The title and the three controls cannot share a
+     row at this width without pushing "换一批" onto a line of its own, so give
+     the tools the full width underneath instead of letting them wrap unevenly. */
+  .card-head-tools {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .spots-tools {
+    justify-content: space-between;
+    gap: 8px 6px;
+  }
+
+  .radius-field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The visible label costs ~54 px, and the select already reads "0–10 km" --
+     the value is self-explanatory. Dropping the word is what lets all three
+     controls share one row at phone widths. It stays in the accessibility tree
+     so the select still has an accessible name. */
+  .radius-field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .radius-field select {
+    /* Take the leftover room so the label and value stay on one line even at
+       360 px, where the option text is the widest thing in the row. */
+    flex: 1 1 auto;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  .spots-refresh {
+    min-width: 78px;
   }
 
   .chat-form {

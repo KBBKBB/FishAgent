@@ -150,10 +150,12 @@
           </div>
           <div class="spots-tools">
             <label class="radius-field" for="radius-select">
-              <span>搜索半径</span>
-              <select id="radius-select" name="radius_km">
-                <option value="50" selected>50 km</option>
-                <option value="100">100 km</option>
+              <span>搜索范围</span>
+              <select id="radius-select" name="radius_range">
+                <option value="0-10" selected>0–10 km</option>
+                <option value="10-50">10–50 km</option>
+                <option value="50-100">50–100 km</option>
+                <option value="100-150">100–150 km</option>
               </select>
             </label>
             <span class="pill pill-soft">往返 ≤ 2 小时</span>

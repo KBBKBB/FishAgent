@@ -101,6 +101,7 @@ def test_stops_after_one_batch_meets_limit(client, install_overrides):
     # drive calls, not the whole candidate list.
     assert filtered == {
         "total_candidates": 120,
+        "within_min_radius": 0,
         "forbidden": 0,
         "unavailable": 0,
         "over_two_hours": 0,
@@ -230,6 +231,7 @@ def test_offset_expands_evaluation_window(client, install_overrides):
     assert len(payload["spots"]) == 5
     assert filtered == {
         "total_candidates": 120,
+        "within_min_radius": 0,
         "forbidden": 0,
         "unavailable": 0,
         "over_two_hours": 0,

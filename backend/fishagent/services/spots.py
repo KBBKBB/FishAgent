@@ -79,13 +79,23 @@ def reset_spot_cache() -> None:
 
 
 def _spot_cache_key(
-    *, lat: float, lon: float, radius_km: float, limit: int, species: str | None, offset: int
+    *,
+    lat: float,
+    lon: float,
+    min_radius_km: float,
+    radius_km: float,
+    limit: int,
+    species: str | None,
+    offset: int,
 ) -> tuple:
     # Coordinates are rounded to ~100 m so trivial GPS jitter still hits the
     # cache; anything finer would produce a new key per request and never hit.
+    # The inner radius is part of the key: 10~50 km and 0~50 km are different
+    # searches and would otherwise answer each other.
     return (
         round(lat, 3),
         round(lon, 3),
+        round(float(min_radius_km), 2),
         round(float(radius_km), 2),
         int(limit),
         species or "",
@@ -699,11 +709,13 @@ async def build_spot_recommendations(
     limit: int,
     species: str | None,
     offset: int = 0,
+    min_radius_km: float = 0.0,
 ) -> SpotRecommendationResponse:
     normalized_species = validate_species(species)
     cache_key = _spot_cache_key(
         lat=lat,
         lon=lon,
+        min_radius_km=min_radius_km,
         radius_km=radius_km,
         limit=limit,
         species=normalized_species,
@@ -728,9 +740,25 @@ async def build_spot_recommendations(
         weather_provider, lat, lon, departure, normalized_species
     )
 
+    # A ring search, not just a cap: "10~50 km" means the near field is excluded
+    # too. Done first, so every counter below describes the ring rather than the
+    # whole circle -- otherwise ``forbidden`` would include spots the user ruled
+    # out by distance and the filtered invariants would not add up.
+    if min_radius_km > 0:
+        min_radius_m = min_radius_km * 1000.0
+        in_ring = [
+            candidate
+            for candidate in candidates
+            if _candidate_distance_m(origin_gcj, candidate) >= min_radius_m
+        ]
+        min_ring_skipped = len(candidates) - len(in_ring)
+    else:
+        in_ring = candidates
+        min_ring_skipped = 0
+
     forbidden = 0
     evaluable: list[SpotCandidate] = []
-    for candidate in candidates:
+    for candidate in in_ring:
         if forbidden_reason(candidate.name, candidate.location_gcj02):
             forbidden += 1
             continue
@@ -743,12 +771,15 @@ async def build_spot_recommendations(
     # and latency to learn the same answer, and the duplicates then compete
     # with the distinct waters for the page.
     distinct_pool = _collapse_duplicate_candidates(evaluable)
+    duplicate_count = len(evaluable) - len(distinct_pool)
     if distinct_pool:
         evaluable = distinct_pool
     # Report against everything that survived filtering, before the pool narrows
     # it. The field means "candidates we did not evaluate", and the reader's
-    # question is how much of the search was skipped.
-    total_evaluable = len(evaluable)
+    # question is how much of the search was skipped. Duplicates are folded in
+    # here rather than tracked as a fourth bucket: they were recalled but never
+    # evaluated, which is exactly what ``unevaluated`` counts.
+    total_evaluable = len(evaluable) + duplicate_count
     # Build the evaluation pool from every direction and every distance ring,
     # not just the nearest candidates.
     #
@@ -840,6 +871,7 @@ async def build_spot_recommendations(
         spots=returned,
         filtered=FilteredStats(
             total_candidates=len(candidates),
+            within_min_radius=min_ring_skipped,
             forbidden=forbidden,
             unavailable=unavailable,
             over_two_hours=over_two_hours,
@@ -851,6 +883,7 @@ async def build_spot_recommendations(
         ),
         meta=SpotsMeta(
             mock_mode=settings.mock_mode,
+            min_radius_km=min_radius_km,
             radius_km=radius_km,
             round_trip_limit_seconds=ROUND_TRIP_LIMIT_SECONDS,
             traffic_basis=TRAFFIC_BASIS,

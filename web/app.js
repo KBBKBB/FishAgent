@@ -7,7 +7,10 @@
   var DEFAULT_LOCATION = MOCK_MODE ? MOCK_DEFAULT_LOCATION : REAL_DEFAULT_LOCATION;
   var DISCLOSURE = '本内容由 AI 生成，仅供参考，不承诺渔获。';
   var HISTORY_LIMIT = 10;
-  var DEFAULT_RADIUS_KM = 50;
+  // Search ring. The default matches the innermost option (0–10 km) because
+  // that is where the nearest water is, and it is what the page used to show.
+  var DEFAULT_MIN_RADIUS_KM = 0;
+  var DEFAULT_RADIUS_KM = 10;
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
   // 后端自己的预算是 FISHAGENT_SPECIES_TIMEOUT_SECONDS（默认 4.0s），它会在预算
@@ -54,6 +57,7 @@
     chatBusy: false,
     seq: 0,
     mockMode: MOCK_MODE,
+    minRadiusKm: DEFAULT_MIN_RADIUS_KM,
     radiusKm: DEFAULT_RADIUS_KM,
     statusTimer: null,
     spotsHintTimer: null,
@@ -979,6 +983,7 @@
       buildQuery('/api/spots/recommend', {
         lat: state.lat,
         lon: state.lon,
+        min_radius_km: state.minRadiusKm,
         radius_km: state.radiusKm,
         limit: SPOT_FETCH_LIMIT
       }),
@@ -1371,6 +1376,11 @@
 
     var summary = el('div', 'spots-summary');
     summary.append(el('span', null, '候选 ' + formatNum(filtered.total_candidates ?? spots.length) + ' 个'));
+    if (Number(filtered.within_min_radius) > 0) {
+      // Otherwise the numbers do not add up for anyone reading them: candidates
+      // minus "too near" is why the counts below are smaller than the total.
+      summary.append(el('span', null, '范围外排除 ' + formatNum(filtered.within_min_radius)));
+    }
     if (filtered.forbidden !== undefined) {
       summary.append(el('span', null, '禁钓排除 ' + formatNum(filtered.forbidden)));
     }
@@ -1391,7 +1401,25 @@
     fragment.append(summary);
 
     if (!spots.length) {
-      fragment.append(el('div', 'empty', '附近暂未找到满足条件的钓位，可尝试更换位置后重试。'));
+      // Say which of the two reasons it is. "10~50 km returned nothing" almost
+      // always means the water in that band is more than two hours away, not
+      // that the search failed -- and telling the user to "try another
+      // location" would send them looking for a problem that is not there.
+      var outer = Number((payload.meta || {}).radius_km) || 0;
+      var innerEdge = Number((payload.meta || {}).min_radius_km) || 0;
+      var onlyTimeFilter = Number(filtered.over_two_hours) > 0;
+      var message;
+      if (outer && onlyTimeFilter && !Number(filtered.eligible)) {
+        message =
+          (innerEdge > 0 ? innerEdge + '–' + outer : '0–' + outer) +
+          ' km 内的水域往返都超过 2 小时，这段距离暂时没有合适的钓位。可以换到近一些的范围试试。';
+      } else if (outer && innerEdge > 0) {
+        message =
+          '这段距离（' + innerEdge + '–' + outer + ' km）内暂未找到满足条件的钓位，可以放宽范围或更换位置。';
+      } else {
+        message = '附近暂未找到满足条件的钓位，可尝试更换位置后重试。';
+      }
+      fragment.append(el('div', 'empty', message));
       body.replaceChildren(fragment);
       body.setAttribute('aria-busy', 'false');
       return;
@@ -1405,7 +1433,17 @@
 
     var meta = payload.meta || {};
     var notes = ['去程与回程分别估算，合计不超过 2 小时', '已排除禁钓候选'];
-    if (meta.radius_km) notes.push('搜索半径 ' + formatNum(meta.radius_km) + ' km');
+    if (meta.radius_km) {
+      // Show the ring, not just the outer edge: for 10–50 km the near water is
+      // excluded on purpose, and "半径 50km" would read as "everything within
+      // 50km", which is the opposite of what happened.
+      var inner = Number(meta.min_radius_km) || 0;
+      notes.push(
+        inner > 0
+          ? '搜索范围 ' + formatNum(inner) + '–' + formatNum(meta.radius_km) + ' km'
+          : '搜索范围 0–' + formatNum(meta.radius_km) + ' km'
+      );
+    }
     if (meta.traffic_basis === 'baseline_estimate') notes.push('车程为基线估计，实际以导航为准');
     if (filtered.returned !== undefined) notes.push('展示 ' + formatNum(filtered.returned) + ' 个');
     var generatedSpots = formatDateTime(meta.generated_at, 'Asia/Shanghai');
@@ -2208,12 +2246,25 @@
     }
   }
 
+  function parseRadiusRange(value) {
+    var parts = String(value || '').split('-');
+    if (parts.length !== 2) return null;
+    var min = Number(parts[0]);
+    var max = Number(parts[1]);
+    if (!isFinite(min) || !isFinite(max) || min < 0 || max <= min) return null;
+    return { min: min, max: max };
+  }
+
   function handleRadiusChange() {
-    var radius = Number($('radius-select').value);
-    if (radius !== 50 && radius !== 100) return;
-    if (radius === state.radiusKm) return;
-    state.radiusKm = radius;
-    setStatus('搜索半径已切换为 ' + radius + ' km，正在重新分析。', 'info', true);
+    var next = parseRadiusRange($('radius-select').value);
+    if (!next) return;
+    if (next.min === state.minRadiusKm && next.max === state.radiusKm) return;
+    state.minRadiusKm = next.min;
+    state.radiusKm = next.max;
+    // Say which ring, not just the outer edge: with "10~50 km" the near spots
+    // are deliberately excluded, and a user who expected the nearest water to
+    // appear needs to know why it did not.
+    setStatus('搜索范围已切换为 ' + next.min + '–' + next.max + ' km，正在重新分析。', 'info', true);
     refreshAll();
   }
 
@@ -2752,22 +2803,32 @@
           navigation_url: 'https://uri.amap.com/marker?position=120.162,30.15&name=湘湖'
         }
     ];
+    // Apply the ring the same way the server does, so the mock does not report
+    // a range it did not honour. A mock that echoes the parameter but ignores
+    // it is worse than no mock: it looks like the feature works.
+    var minMetres = state.minRadiusKm * 1000;
+    var maxMetres = state.radiusKm * 1000;
+    var inRing = allSpots.filter(function (spot) {
+      return spot.distance_m >= minMetres && spot.distance_m <= maxMetres;
+    });
     return {
       user_location: {
         wgs84: { lat: state.lat, lon: state.lon },
         gcj02: { lat: 30.2756, lon: 120.1598 }
       },
-      spots: allSpots,
+      spots: inRing,
       filtered: {
-        total_candidates: 9,
+        total_candidates: allSpots.length,
+        within_min_radius: allSpots.length - inRing.length,
         forbidden: 1,
-        over_two_hours: 2,
-        eligible: allSpots.length,
-        returned: allSpots.length,
+        over_two_hours: 0,
+        eligible: inRing.length,
+        returned: inRing.length,
         truncated_by_limit: 0
       },
       meta: {
         mock_mode: true,
+        min_radius_km: state.minRadiusKm,
         radius_km: state.radiusKm,
         round_trip_limit_seconds: 7200,
         traffic_basis: 'baseline_estimate',
@@ -2891,7 +2952,7 @@
 
   function init() {
     syncLocationUI();
-    $('radius-select').value = String(state.radiusKm);
+    $('radius-select').value = state.minRadiusKm + '-' + state.radiusKm;
     bindEvents();
     initPwa();
     if (state.mockMode) {

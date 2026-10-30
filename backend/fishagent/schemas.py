@@ -184,6 +184,10 @@ class UserLocationOut(BaseModel):
 
 class FilteredStats(BaseModel):
     total_candidates: int = Field(ge=0)
+    # Recalled candidates closer than the ring's inner edge. Without this the
+    # invariants below would not add up for a 10~50 km search, and a reader
+    # could not tell "excluded for being too near" from "never found".
+    within_min_radius: int = Field(default=0, ge=0)
     forbidden: int = Field(ge=0)
     unavailable: int = Field(default=0, ge=0)
     over_two_hours: int = Field(ge=0)
@@ -196,6 +200,9 @@ class FilteredStats(BaseModel):
 
 class SpotsMeta(BaseModel):
     mock_mode: bool
+    # The ring the search covered; equal when min is 0, which is the plain
+    # "everything within radius_km" case.
+    min_radius_km: float = 0.0
     radius_km: float
     round_trip_limit_seconds: int
     traffic_basis: str

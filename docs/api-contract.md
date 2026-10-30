@@ -23,6 +23,7 @@
 > v2.7c（2026-10-30）：8018 与开机自启改回**明文 HTTP**（`serve.bat`）。手机端因此没有定位与 Service Worker，页面如实提示；`serve-https.bat` 保留备用。接口不变。
 > v2.8（2026-10-30）：新增 4.8 静态资源缓存与版本提示。shell 资源改 `no-cache`，`/health` 增加内容哈希 `build` 字段并注入 `index.html`，页面轮询发现新版本后提示、由用户自己点刷新。`/health` 响应新增 `build`（向后兼容的增量字段）。
 > v2.9（2026-10-30）：钓位推荐不再总是「离你最近的几个」——评估池按方向扇区 × 距离环取样，分页前做间距交错，同名水体先去重；`meta` 增加 `selection_strategy` / `min_separation_m` / `separation_relaxed` 三个增量字段。
+> v2.10（2026-10-30）：搜索半径改为**环带**。新增 `min_radius_km`（默认 0，旧调用行为不变），前端改为 0–10 / 10–50 / 50–100 / 100–150 四档；`filtered` 增加 `within_min_radius`，`meta` 增加 `min_radius_km`。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -216,7 +217,8 @@ fixtures/                         # 小产：演示场景
 | `lat` | float | 是 | WGS84 |
 | `lon` | float | 是 | WGS84 |
 | `species` | string | 否 | 目标鱼种 |
-| `radius_km` | float | 否 | 默认 100，范围 1–150 |
+| `radius_km` | float | 否 | 外圈半径，默认 100，范围 1–150 |
+| `min_radius_km` | float | 否 | 内圈半径，默认 0，范围 0–150。与 `radius_km` 构成**环带**，见下 |
 | `limit` | int | 否 | 默认 5，范围 1–10 |
 | `offset` | int | 否 | 默认 0，范围 0–20；在排序后的合格候选中跳过前 `offset` 个，用于“换一批” |
 
@@ -275,6 +277,11 @@ fixtures/                         # 小产：演示场景
 - 去程与回程分别取时长，过滤条件 `drive_seconds_out + drive_seconds_back <= 7200`；禁止用单程×2。
 - 有 `entr_location` 时必须用入口坐标；缺失回退中心点并置 `entry_precision="center_fallback"`，UI 标注「端点精度较低」。
 - 禁钓候选在返回前排除（Mock：名称黑名单 + 示例禁钓圆区；边界不明时保守排除）。
+- **搜索范围是环带，不是上限**（2026-10-30）：`min_radius_km`~`radius_km` 表示**只**返回落在这个区间内的钓位，内圈同样排除。`min_radius_km` 默认 0，因此不传时行为与旧版「半径上限」完全一致。**不做内圈排除的话，用户想看"远一点"时，返回的还是那几个最近的**——而最近的往往正是分数最高的，区间就白设了。
+  - 违例（`min_radius_km >= radius_km`，或越界）返回 422 `INVALID_RADIUS_RANGE`。空环带（如 50~50）视为笔误而非查询。
+  - 内圈排除**发生在禁钓过滤与取样之前**，因此 `filtered.forbidden` 等计数描述的都是环带内的情况，不会把用户按距离排除掉的候选算进禁钓数。
+  - 缓存键包含 `min_radius_km`：`10~50` 与 `0~50` 是两次不同搜索，共用一个键会让其中一次静默失效。
+  - **可能返回空**：环带内若不存在 2 小时内可往返的水域，结果就是空列表。这是「往返 ≤ 2 小时」这条硬规则的结果，不是搜索失败。实测成都 20km 以外没有任何水域满足该条件，因此 50–100、100–150 两档在成都稳定为空；前端文案会说明是「这段距离的水域往返都超过 2 小时」，不写成「换个位置试试」。
 - 排序：`total_score` 降序；同分按往返时长升序。`drive_seconds_out/back/round_trip` 均为整数秒；`drive_minutes_one_way = round_half_up(drive_seconds_out / 60)`（四舍五入到整数分钟）。
 - 往返均超过 2h 的候选不得出现在 `spots`，仅计入 `filtered.over_two_hours`。
 - **真实模式召回口径**：高德 around 使用 `types=190204|190205`（自然地名-河流/湖泊）、`sortrule=distance`、`extensions=all`；只保留 `typecode` 为 190204/190205 的水体，`110202` 仅在名称含湖/河/江/溪等水体词时保留。餐饮、住宅、学校、商场、KTV、道路以及经营部/商行/公司/工厂/建材/沙石/五金/超市/商店/门市/批发/经销/商贸等商业 POI 一律排除。
@@ -288,11 +295,12 @@ fixtures/                         # 小产：演示场景
 - **有界并发与限速**：召回分片与路径规划共享并发信号量（`FISHAGENT_AMAP_CONCURRENCY`，默认 6）与请求起间隔（`FISHAGENT_AMAP_QPS`，默认 2）；Mock 不受影响。**QPS=2 是高德账号的硬限制**，实测调高会返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`，因此提高并发数对总耗时无效（实测 6/12/20 并发均为 14s 量级）。
 - **去程/回程只算一次**：真实 `AMapGeoProvider.estimate_drive_seconds` 忽略 `direction` 参数，去程与回程是对同一 origin/destination 的完全相同请求。服务层因此只发一次（`direction_affects_result=False`），往返时间按 2 倍展示。Mock 区分去/回程（`_TRAVEL_FACTORS`），故保留两次调用。
 - **结果缓存**：`GET /api/spots/recommend` 按 (坐标四舍五入 3 位、radius_km、limit、species、offset) 缓存 180s（`_CACHE_TTL_SECONDS`），LRU 上限 256 条。车程是基线估算，几分钟内变化在噪声范围内。实测冷启动 14.8s → 8.1s，热命中 <20ms。
-- `filtered` 口径（固定顺序）：`total_candidates` = 召回并去重后的候选总数（进入过滤前的基数）；先禁钓过滤，再对评估窗口做往返过滤，最后排序截断。保持不变式：
-  `total_candidates = forbidden + evaluated + unevaluated`；
+- `filtered` 口径（固定顺序）：`total_candidates` = 召回总数（进入任何过滤前的基数）；先按内圈半径排除，再禁钓过滤，再对评估窗口做往返过滤，最后排序截断。保持不变式：
+  `total_candidates = within_min_radius + forbidden + evaluated + unevaluated`；
   `evaluated = unavailable + over_two_hours + eligible`；
   `eligible = returned + truncated_by_limit`；
   `returned = len(spots)`。
+  `unevaluated` 含被省略的去重候选：它们被召回了但没有任何车程估算，正是"未评估"的含义。
   同时命中禁钓与超时的候选只计入 `forbidden`。`unevaluated` 为未进入评估窗口的候选；Mock 全量评估，因此 `unevaluated=0`，上述不变式退化为 `total_candidates = forbidden + over_two_hours + eligible`。
 
 ### 4.4 `POST /api/agent/chat`
@@ -572,3 +580,4 @@ cd backend
 | v2.7c | 2026-10-30 | **回退 v2.7**：8018 与开机自启改回明文 HTTP（新增 `serve.bat`，VBS 用 `Const BAT_NAME` 切换）。接受手机端无定位、无 SW；`serve-https.bat` 保留备用。接口不变 | 真机装 mkcert CA 的门槛、以及证书按 IP 签发导致换地址就要重签，比换回来的定位与 PWA 更麻烦；页面已能如实说明限制，不再把协议问题说成权限问题 |
 | v2.8 | 2026-10-30 | shell 资源加 `Cache-Control: no-cache`；`/health` 增加内容哈希 `build` 并注入 `index.html`；页面轮询发现新版后显示提示条，由用户点「立即更新」 | 静态响应原本不带 `Cache-Control`，浏览器按启发式新鲜度自行缓存，旧 `app.js` 可能几小时不回源，**刷新也拿不到新版**；手机端没有 SW 兜底，只能靠 HTTP 缓存策略 |
 | v2.9 | 2026-10-30 | 钓位推荐改为「扇区 × 距离环」取样评估池 + 间距交错分页 + 同名水体去重；`meta` 新增 `selection_strategy` / `min_separation_m` / `separation_relaxed` | 实测成都 80km 搜出 448 个候选，返回的 5 个全在 7.7km 内、鱼情分全是 81（排序实际等价于「最近的几个」）；另有一页 5 张卡片里 3 张同名「府河」，用户无从区分 |
+| v2.10 | 2026-10-30 | 搜索半径改为**环带**：新增 `min_radius_km`（默认 0，兼容旧调用），前端下拉改为 0–10 / 10–50 / 50–100 / 100–150 四档；`filtered` 新增 `within_min_radius`，`meta` 新增 `min_radius_km` | 用户要看「远一点的地方」，而单一半径只能收窄外圈，返回的仍是那几个最近的；环带才能真正把近处的排除掉 |

@@ -19,6 +19,7 @@
 > v2.6（2026-10-29）：新增 4.5b `GET /api/geo/search`、`GET /api/geo/nearby`（位置选择器）。Step 1 主路径改为「搜地名 / 看附近」，经纬度输入收进「高级」折叠区；新增 `PlaceCandidate` / `PlaceSearchResponse` schema。
 > v2.6b（2026-10-29）：定位前检查 `isSecureContext`，非 https 时如实说明「不是权限问题」；定位成功后收起选择器列表并覆盖之前的选择。接口不变。
 > v2.7（2026-10-30）：8018 直接改为 HTTPS（同一份 mkcert 证书），新增根目录 `serve-https.bat`；明文 http 访问停用，8020 仅保留为可选的 Mock 验证实例。接口不变。
+> v2.7b（2026-10-30）：新增 `scripts/start-fishagent.vbs` 并装入 Windows 启动文件夹，登录后自动以隐藏方式拉起 HTTPS 服务；仓库搬家需同步更新 `D:\FishAgent\repo-root.txt`。接口不变。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -523,3 +524,4 @@ cd backend
 | v2.6 | 2026-10-29 | 新增 `/api/geo/search` 与 `/api/geo/nearby`；Step 1 改为地名搜索 + 附近水域，坐标输入折叠进「高级」 | Step 1 唯一的手动入口是一对经纬度输入框，普通用户记不住也读不懂；钓鱼的人知道「三岔湖」但不知道 30.2794/104.2669 |
 | v2.6b | 2026-10-29 | 定位前检查 `isSecureContext`；非 https 时明确说明「不是权限问题」；定位成功后收起选择器列表 | 真机用 http 访问局域网 IP 时，浏览器把「不提供定位」报成 `PERMISSION_DENIED`，前端统一提示「定位权限被拒绝」，把地址协议问题误导成权限问题 |
 | v2.7 | 2026-10-30 | 8018 直接改为 HTTPS（mkcert IP SAN 证书），新增 `serve-https.bat` 启动脚本；8020 降为可选 | 明文 8018 在真机上永久失去定位与 Service Worker，靠前端提示只是把问题说清楚、并未解决；独立 8020 实例多一个要维护的进程 |
+| v2.7b | 2026-10-30 | 新增 `scripts/start-fishagent.vbs` 并放入启动文件夹（无窗口、重复启动自动跳过、日志落 `D:\FishAgent\logs`） | 主机重启后手工起服务会退回明文访问或干脆没起，定位与 PWA 又失效；`.bat` 放启动项会常驻命令行窗口 |

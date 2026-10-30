@@ -181,6 +181,20 @@ icacls "D:\FishAgent\certs" /inheritance:r /grant:r "koubinbin:(OI)(CI)(F)" "*S-
 > **明文 `http://<IP>:8018` 已不可用**（同一端口只提供 TLS）；同机调试请用
 > `https://127.0.0.1:8018` 或 `https://localhost:8018`。
 >
+> ### 开机自启（启动文件夹方案）
+>
+> `scripts/start-fishagent.vbs` 启动服务且**不留控制台窗口**，它被复制到启动文件夹：
+> `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FishAgent.vbs`。
+>
+> - 用 `pythonw`/`.bat` 直接放启动项会常驻一个命令行窗口；`.vbs` 以隐藏方式拉起，登录不受阻。
+> - **已占用 8018 时自动跳过**，不会每次登录都写一条端口占用错误。
+> - 输出追加到 `D:\FishAgent\logs\uvicorn-8018.log`；启动失败可在此查因。
+> - 仓库路径含中文，而 **cscript 按系统 ANSI 代码页读取 `.vbs`**：脚本本身必须保持**纯 ASCII**，
+>   路径因此不在脚本里硬编码，而是按序解析：① 脚本上一级（在 `scripts\` 下时有效）；
+>   ② `D:\FishAgent\repo-root.txt`（UTF-16，启动文件夹场景用这条）；③ `%FISHAGENT_ROOT%`。
+>   **仓库搬家后必须更新 `repo-root.txt`**，否则启动项会失败并把原因写进日志。
+> - 换端口时 VBS 里的 `Const PORT` 与 `serve-https.bat` 的端口需一起改。
+>
 > 8020 仍可用于「Mock 模式 + 不消耗上游」的真机安装验证，按 §5.1 单独启动即可；
 > 两者不能同时占用同一端口。以下 §5.1 原始命令保留，用于 8020。
 

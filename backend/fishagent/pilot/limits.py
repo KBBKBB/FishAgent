@@ -22,7 +22,7 @@ from fishagent.providers.base import (
     WeatherProvider,
 )
 from fishagent.providers.species_extract import SpeciesExtractor
-from fishagent.schemas import LatLon, SpotCandidate, WeatherSnapshot
+from fishagent.schemas import LatLon, PlaceCandidate, SpotCandidate, WeatherSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,16 @@ class QuotaGuardedGeoProvider:
     ) -> list[SpotCandidate]:
         self._ledger.consume("amap")
         return await self._inner.find_water_spots(origin, center, radius_m)
+
+    async def search_places(self, keyword: str, *, limit: int = 8) -> list[PlaceCandidate]:
+        self._ledger.consume("amap")
+        return await self._inner.search_places(keyword, limit=limit)
+
+    async def nearby_water(
+        self, origin: LatLon, *, radius_m: int = 30_000, limit: int = 8
+    ) -> list[PlaceCandidate]:
+        self._ledger.consume("amap")
+        return await self._inner.nearby_water(origin, radius_m=radius_m, limit=limit)
 
     async def estimate_drive_seconds(
         self,

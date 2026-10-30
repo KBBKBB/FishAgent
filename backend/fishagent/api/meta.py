@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 
 from fishagent import __version__
 from fishagent.config import get_settings
@@ -12,9 +12,19 @@ router = APIRouter(tags=["meta"])
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+async def health(request: Request, response: Response) -> HealthResponse:
     settings = get_settings()
-    return HealthResponse(status="ok", version=__version__, mock_mode=settings.mock_mode)
+    holder = getattr(request.app.state, "build_id", None)
+    # no-store because this is the endpoint the page polls to find out whether
+    # it is stale; a cached answer would make it poll forever and never see the
+    # change. Responses are tiny and this is a LAN address.
+    response.headers["Cache-Control"] = "no-store"
+    return HealthResponse(
+        status="ok",
+        version=__version__,
+        build=holder.get() if holder is not None else "",
+        mock_mode=settings.mock_mode,
+    )
 
 
 @router.get("/api/demo/config", response_model=DemoConfigResponse)

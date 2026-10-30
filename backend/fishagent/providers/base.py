@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
-from fishagent.schemas import LatLon, SpotCandidate, SpotSpeciesQuery, WeatherSnapshot
+from fishagent.schemas import (
+    LatLon,
+    PlaceCandidate,
+    SpotCandidate,
+    SpotSpeciesQuery,
+    WeatherSnapshot,
+)
 
 
 class ProviderError(RuntimeError):
@@ -42,12 +48,29 @@ class WeatherProvider(Protocol):
 
 @runtime_checkable
 class GeoProvider(Protocol):
+    """Water POI lookup, driving times, and location-picker helpers.
+
+    ``search_places`` and ``nearby_water`` back the Step 1 location picker: most
+    anglers know a place by name, not by coordinates. They are part of this
+    protocol rather than a separate one because they hit the same upstream, the
+    same key and the same quota; a provider that cannot resolve a name cannot
+    offer a picker but can still recommend spots, so both are optional at the
+    call site (guarded with ``getattr``).
+    """
+
     async def find_water_spots(
         self,
         origin: LatLon,
         center: LatLon,
         radius_m: int,
     ) -> list[SpotCandidate]: ...
+
+    async def search_places(self, keyword: str, *, limit: int = 8) -> list[PlaceCandidate]:
+        ...
+
+    async def nearby_water(
+        self, origin: LatLon, *, radius_m: int = 30_000, limit: int = 8
+    ) -> list[PlaceCandidate]: ...
 
     async def estimate_drive_seconds(
         self,

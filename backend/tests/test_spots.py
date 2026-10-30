@@ -50,8 +50,18 @@ def assert_filtered_invariant(payload):
     for key in keys:
         assert isinstance(filtered[key], int) and filtered[key] >= 0, (key, filtered[key])
 
+    # Everything recalled is accounted for exactly once: dropped for being
+    # inside the ring, forbidden, evaluated (then kept or discarded), or not
+    # evaluated at all. Duplicates collapse into "not evaluated" because that
+    # is what happened to them.
     assert filtered["total_candidates"] == (
-        filtered["forbidden"] + filtered["over_two_hours"] + filtered["eligible"]
+        filtered.get("within_min_radius", 0)
+        + filtered["forbidden"]
+        + filtered["evaluated"]
+        + filtered["unevaluated"]
+    ), filtered
+    assert filtered["evaluated"] == (
+        filtered["unavailable"] + filtered["over_two_hours"] + filtered["eligible"]
     ), filtered
     assert filtered["eligible"] == filtered["returned"] + filtered["truncated_by_limit"], filtered
     assert filtered["returned"] == len(payload["spots"]), filtered

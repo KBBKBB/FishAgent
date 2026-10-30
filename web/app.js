@@ -7,7 +7,10 @@
   var DEFAULT_LOCATION = MOCK_MODE ? MOCK_DEFAULT_LOCATION : REAL_DEFAULT_LOCATION;
   var DISCLOSURE = '本内容由 AI 生成，仅供参考，不承诺渔获。';
   var HISTORY_LIMIT = 10;
-  var DEFAULT_RADIUS_KM = 50;
+  // Search ring. The default matches the innermost option (0–10 km) because
+  // that is where the nearest water is, and it is what the page used to show.
+  var DEFAULT_MIN_RADIUS_KM = 0;
+  var DEFAULT_RADIUS_KM = 10;
   var SPOT_LIMIT = 5;
   var SPOT_FETCH_LIMIT = 10;
   // 后端自己的预算是 FISHAGENT_SPECIES_TIMEOUT_SECONDS（默认 4.0s），它会在预算
@@ -21,6 +24,8 @@
   // 10 个候选冷启动约 10s。给足余量，超时后提示"较慢"而不是"不可用"。
   var SPOTS_TIMEOUT_MS = 45000;
   var IDENTIFY_TIMEOUT_MS = 60000;
+  // 地名搜索/附近水域是高德 POI 查询，和钓鱼种查询一样是一次外呼，不需要长等待。
+  var GEO_TIMEOUT_MS = 12000;
   var IDENTIFY_MAX_BYTES = 8 * 1024 * 1024;
   var IDENTIFY_MAX_NOTE = 100;
   var IDENTIFY_MAX_BYTES_TEXT = '图片过大，请压缩后重试';
@@ -52,6 +57,7 @@
     chatBusy: false,
     seq: 0,
     mockMode: MOCK_MODE,
+    minRadiusKm: DEFAULT_MIN_RADIUS_KM,
     radiusKm: DEFAULT_RADIUS_KM,
     statusTimer: null,
     spotsHintTimer: null,
@@ -63,7 +69,10 @@
     speciesPending: {},
     speciesError: {},
     identifyBusy: false,
-    identifyRun: null
+    identifyRun: null,
+    updatePollTimer: null,
+    updateDismissedBuild: null,
+    updateSeenBuild: null
   };
 
   function $(id) {
@@ -856,6 +865,73 @@
     return data;
   }
 
+  // How often an open page asks the server which build it is serving.
+  // A minute is frequent enough that a deploy lands while the user is still
+  // looking at the page, and cheap enough to ignore: the answer is a tiny
+  // no-store JSON.
+  var UPDATE_POLL_MS = 60000;
+
+  function currentBuild() {
+    var meta = document.querySelector('meta[name="fishagent-build"]');
+    var value = meta ? meta.getAttribute('content') : '';
+    // The server replaces the placeholder; if it did not, this page was served
+    // by something other than our app (a stale proxy, a file:// copy). Treat
+    // that as "unknown" rather than as a build id, or every poll would report
+    // an update.
+    if (!value || value === '__FISHAGENT_BUILD__') return '';
+    return value;
+  }
+
+  function setUpdateBannerVisible(visible) {
+    var banner = $('update-banner');
+    if (!banner) return;
+    banner.hidden = !visible;
+    // The banner is fixed over the bottom of the viewport, so lift the page
+    // content clear of it while it is up.
+    document.body.classList.toggle('has-update-banner', visible);
+  }
+
+  function showUpdateBanner(serverBuild) {
+    var banner = $('update-banner');
+    if (!banner) return;
+    state.updateSeenBuild = serverBuild;
+    // Stay hidden if the user already said "later" for this exact build; a
+    // banner that keeps coming back after being dismissed is just noise.
+    if (state.updateDismissedBuild === serverBuild) {
+      setUpdateBannerVisible(false);
+      return;
+    }
+    setUpdateBannerVisible(true);
+  }
+
+  function checkForUpdate() {
+    var mine = currentBuild();
+    if (!mine) return Promise.resolve();
+    return requestJSON('/health', { cache: 'no-store' }, { timeoutMs: GEO_TIMEOUT_MS })
+      .then(function (health) {
+        var server = health && health.build;
+        if (server && server !== mine) showUpdateBanner(server);
+        return null;
+      })
+      .catch(function () {
+        // Offline or the server is down: say nothing. A failed poll is not
+        // evidence of an update, and the offline banner already covers this.
+        return null;
+      });
+  }
+
+  function startUpdateWatch() {
+    if (!currentBuild()) return;
+    checkForUpdate();
+    if (state.updatePollTimer) clearInterval(state.updatePollTimer);
+    state.updatePollTimer = setInterval(checkForUpdate, UPDATE_POLL_MS);
+    // A phone that was backgrounded comes back with a stale page and no timer
+    // having fired in between; re-check on return.
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
+  }
+
   async function checkHealth() {
     try {
       var health = await requestJSON('/health');
@@ -916,6 +992,7 @@
       buildQuery('/api/spots/recommend', {
         lat: state.lat,
         lon: state.lon,
+        min_radius_km: state.minRadiusKm,
         radius_km: state.radiusKm,
         limit: SPOT_FETCH_LIMIT
       }),
@@ -1308,6 +1385,11 @@
 
     var summary = el('div', 'spots-summary');
     summary.append(el('span', null, '候选 ' + formatNum(filtered.total_candidates ?? spots.length) + ' 个'));
+    if (Number(filtered.within_min_radius) > 0) {
+      // Otherwise the numbers do not add up for anyone reading them: candidates
+      // minus "too near" is why the counts below are smaller than the total.
+      summary.append(el('span', null, '范围外排除 ' + formatNum(filtered.within_min_radius)));
+    }
     if (filtered.forbidden !== undefined) {
       summary.append(el('span', null, '禁钓排除 ' + formatNum(filtered.forbidden)));
     }
@@ -1328,7 +1410,25 @@
     fragment.append(summary);
 
     if (!spots.length) {
-      fragment.append(el('div', 'empty', '附近暂未找到满足条件的钓位，可尝试更换位置后重试。'));
+      // Say which of the two reasons it is. "10~50 km returned nothing" almost
+      // always means the water in that band is more than two hours away, not
+      // that the search failed -- and telling the user to "try another
+      // location" would send them looking for a problem that is not there.
+      var outer = Number((payload.meta || {}).radius_km) || 0;
+      var innerEdge = Number((payload.meta || {}).min_radius_km) || 0;
+      var onlyTimeFilter = Number(filtered.over_two_hours) > 0;
+      var message;
+      if (outer && onlyTimeFilter && !Number(filtered.eligible)) {
+        message =
+          (innerEdge > 0 ? innerEdge + '–' + outer : '0–' + outer) +
+          ' km 内的水域往返都超过 2 小时，这段距离暂时没有合适的钓位。可以换到近一些的范围试试。';
+      } else if (outer && innerEdge > 0) {
+        message =
+          '这段距离（' + innerEdge + '–' + outer + ' km）内暂未找到满足条件的钓位，可以放宽范围或更换位置。';
+      } else {
+        message = '附近暂未找到满足条件的钓位，可尝试更换位置后重试。';
+      }
+      fragment.append(el('div', 'empty', message));
       body.replaceChildren(fragment);
       body.setAttribute('aria-busy', 'false');
       return;
@@ -1342,7 +1442,17 @@
 
     var meta = payload.meta || {};
     var notes = ['去程与回程分别估算，合计不超过 2 小时', '已排除禁钓候选'];
-    if (meta.radius_km) notes.push('搜索半径 ' + formatNum(meta.radius_km) + ' km');
+    if (meta.radius_km) {
+      // Show the ring, not just the outer edge: for 10–50 km the near water is
+      // excluded on purpose, and "半径 50km" would read as "everything within
+      // 50km", which is the opposite of what happened.
+      var inner = Number(meta.min_radius_km) || 0;
+      notes.push(
+        inner > 0
+          ? '搜索范围 ' + formatNum(inner) + '–' + formatNum(meta.radius_km) + ' km'
+          : '搜索范围 0–' + formatNum(meta.radius_km) + ' km'
+      );
+    }
     if (meta.traffic_basis === 'baseline_estimate') notes.push('车程为基线估计，实际以导航为准');
     if (filtered.returned !== undefined) notes.push('展示 ' + formatNum(filtered.returned) + ' 个');
     var generatedSpots = formatDateTime(meta.generated_at, 'Asia/Shanghai');
@@ -2145,12 +2255,25 @@
     }
   }
 
+  function parseRadiusRange(value) {
+    var parts = String(value || '').split('-');
+    if (parts.length !== 2) return null;
+    var min = Number(parts[0]);
+    var max = Number(parts[1]);
+    if (!isFinite(min) || !isFinite(max) || min < 0 || max <= min) return null;
+    return { min: min, max: max };
+  }
+
   function handleRadiusChange() {
-    var radius = Number($('radius-select').value);
-    if (radius !== 50 && radius !== 100) return;
-    if (radius === state.radiusKm) return;
-    state.radiusKm = radius;
-    setStatus('搜索半径已切换为 ' + radius + ' km，正在重新分析。', 'info', true);
+    var next = parseRadiusRange($('radius-select').value);
+    if (!next) return;
+    if (next.min === state.minRadiusKm && next.max === state.radiusKm) return;
+    state.minRadiusKm = next.min;
+    state.radiusKm = next.max;
+    // Say which ring, not just the outer edge: with "10~50 km" the near spots
+    // are deliberately excluded, and a user who expected the nearest water to
+    // appear needs to know why it did not.
+    setStatus('搜索范围已切换为 ' + next.min + '–' + next.max + ' km，正在重新分析。', 'info', true);
     refreshAll();
   }
 
@@ -2183,9 +2306,22 @@
 
   function handleGeolocation() {
     if (!('geolocation' in navigator)) {
-      setStatus('当前浏览器不支持定位，请手动输入坐标。', 'error');
+      setStatus('当前浏览器不支持定位，请搜索地名或手动输入坐标。', 'error');
       return;
     }
+    // 非安全上下文（http 访问局域网 IP）下，浏览器把「根本不给用」也报成
+    // PERMISSION_DENIED（code 1），和用户真的点了"拒绝"完全无法区分。若不
+    // 在这里先分辨，提示就会变成「定位权限被拒绝」，把人推去找一个永远改不
+    // 好的开关——这和把服务超时说成「不支持的图片格式」是同一类错误。
+    if (window.isSecureContext === false) {
+      var insecure =
+        '当前是 http 地址，浏览器不提供定位能力（不是权限问题）。' +
+        '请改用 https 地址打开，或直接搜索地名、手动输入坐标。';
+      setGeoStatus(insecure);
+      setStatus(insecure, 'error');
+      return;
+    }
+    hidePlaceLists();
     var button = $('geo-btn');
     button.disabled = true;
     setGeoStatus('正在获取定位…');
@@ -2195,6 +2331,7 @@
         var lat = roundCoord(position.coords.latitude);
         var lon = roundCoord(position.coords.longitude);
         var accuracy = Math.round(Number(position.coords.accuracy) || 0);
+        // 定位是用户当下所在，优先级最高：直接覆盖之前搜索或点选的地点。
         state.lat = lat;
         state.lon = lon;
         state.name = '我的位置';
@@ -2205,10 +2342,14 @@
       },
       function (error) {
         button.disabled = false;
-        var message = '定位失败，请手动输入坐标。';
-        if (error && error.code === 1) message = '定位权限被拒绝，请允许权限或手动输入坐标。';
-        else if (error && error.code === 2) message = '当前无法获取位置，请手动输入坐标。';
-        else if (error && error.code === 3) message = '定位超时，请重试或手动输入坐标。';
+        var message = '定位失败，请搜索地名或手动输入坐标。';
+        if (error && error.code === 1) {
+          message = '定位权限被拒绝，请在浏览器设置中允许本站定位，或搜索地名。';
+        } else if (error && error.code === 2) {
+          message = '当前无法获取位置（可能是系统定位已关闭），请搜索地名或手动输入坐标。';
+        } else if (error && error.code === 3) {
+          message = '定位超时，请重试或搜索地名。';
+        }
         setGeoStatus(message);
         setStatus(message, 'error');
       },
@@ -2216,9 +2357,175 @@
     );
   }
 
+  // --- 位置选择器：地名搜索 / 附近水域 -----------------------------------
+  //
+  // 原来 Step 1 唯一的手动入口是一对经纬度输入框，这对普通用户没有意义 --
+  // 钓鱼的人记得住"青龙湖"，记不住 30.6570。地名搜索和附近水域列表把这两条
+  // 更自然的路径放在前面，坐标输入收进"高级"里给需要精确复现的人。
+
+  function placeKey(place) {
+    return String(place.lat) + ',' + String(place.lon);
+  }
+
+  function renderPlaceList(list, places, onPick) {
+    list.textContent = '';
+    places.forEach(function (place) {
+      var item = el('li', 'place-item');
+      var button = el('button', 'place-choice');
+      button.type = 'button';
+      button.setAttribute('role', 'option');
+      button.append(el('span', 'place-name', place.name));
+      var meta = [];
+      if (place.address) meta.push(place.address);
+      if (place.kind && place.kind !== 'place') meta.push(place.kind);
+      if (typeof place.distance_m === 'number') {
+        var km = place.distance_m / 1000;
+        meta.push(km < 1 ? '约 ' + Math.round(place.distance_m) + ' 米' : '约 ' + km.toFixed(1) + ' 公里');
+      }
+      if (meta.length) button.append(el('span', 'place-meta', meta.join(' · ')));
+      button.addEventListener('click', function () {
+        onPick(place);
+      });
+      item.append(button);
+      list.append(item);
+    });
+  }
+
+  function applyPlace(place, sourceLabel) {
+    var lat = roundCoord(Number(place.lat));
+    var lon = roundCoord(Number(place.lon));
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      setStatus('这个地点没有可用的坐标，请换一个。', 'error');
+      return;
+    }
+    state.lat = lat;
+    state.lon = lon;
+    state.name = place.name || sourceLabel;
+    syncLocationUI();
+    hidePlaceLists();
+    setGeoStatus('已选择「' + state.name + '」，正在重新分析。');
+    setStatus('位置已更新为「' + state.name + '」，正在重新分析。', 'info', true);
+    refreshAll();
+  }
+
+  function hidePlaceLists() {
+    var results = $('place-results');
+    if (results) results.hidden = true;
+    var nearby = $('nearby-list');
+    if (nearby) nearby.hidden = true;
+  }
+
+  function setPlaceBusy(busy) {
+    var searchBtn = $('place-search-btn');
+    var input = $('place-input');
+    if (searchBtn) searchBtn.disabled = busy;
+    if (input) input.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+
+  function showPlaceMessage(list, text) {
+    list.textContent = '';
+    var item = el('li', 'place-empty');
+    item.textContent = text;
+    list.append(item);
+    list.hidden = false;
+  }
+
+  async function handlePlaceSearch(event) {
+    if (event) event.preventDefault();
+    var input = $('place-input');
+    var keyword = input ? input.value.trim() : '';
+    var results = $('place-results');
+    var list = $('place-list');
+    var label = $('place-results-label');
+    if (!keyword) {
+      setGeoStatus('请输入地名或钓点名称。');
+      if (input) input.focus();
+      return;
+    }
+    hidePlaceLists();
+    results.hidden = false;
+    if (label) label.textContent = '正在搜索「' + keyword + '」…';
+    list.textContent = '';
+    setPlaceBusy(true);
+    try {
+      var data = await requestJSON(
+        buildQuery('/api/geo/search', { q: keyword }),
+        {},
+        { timeoutMs: GEO_TIMEOUT_MS }
+      );
+      var places = Array.isArray(data && data.results) ? data.results : [];
+      if (label) label.textContent = '「' + keyword + '」的搜索结果';
+      if (!places.length) {
+        // resolved=false 表示这个 provider 根本不会搜索，不是"没这个地方" --
+        // 把两者说成一样会让用户以为是自己打错了。
+        var cannot = data && data.resolved === false;
+        showPlaceMessage(
+          list,
+          cannot ? '当前数据源不支持地名搜索，请使用附近的定位或手动输入坐标。' : '没有找到这个地名，换个说法试试，或使用「附近水域」。'
+        );
+        return;
+      }
+      renderPlaceList(list, places, function (place) {
+        applyPlace(place, '搜索结果');
+      });
+      list.hidden = false;
+    } catch (error) {
+      if (label) label.textContent = '搜索失败';
+      showPlaceMessage(list, (error && error.message) || '地名搜索失败，请稍后重试。');
+    } finally {
+      setPlaceBusy(false);
+    }
+  }
+
+  async function handleNearby(event) {
+    if (event) event.preventDefault();
+    var list = $('nearby-list');
+    var button = $('nearby-btn');
+    hidePlaceLists();
+    if (button) button.disabled = true;
+    showPlaceMessage(list, '正在查找附近水域…');
+    try {
+      var data = await requestJSON(
+        buildQuery('/api/geo/nearby', { lat: state.lat, lon: state.lon }),
+        {},
+        { timeoutMs: GEO_TIMEOUT_MS }
+      );
+      var places = Array.isArray(data && data.results) ? data.results : [];
+      if (!places.length) {
+        showPlaceMessage(list, '附近没有查到已收录的水域，可以直接用当前定位分析。');
+        return;
+      }
+      renderPlaceList(list, places, function (place) {
+        applyPlace(place, '附近水域');
+      });
+      list.hidden = false;
+    } catch (error) {
+      showPlaceMessage(list, (error && error.message) || '查找附近水域失败，请稍后重试。');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function bindEvents() {
     $('coord-form').addEventListener('submit', handleManualLocation);
+    $('place-form').addEventListener('submit', handlePlaceSearch);
+    $('place-search-btn').addEventListener('click', handlePlaceSearch);
+    $('place-results-close').addEventListener('click', function () {
+      $('place-results').hidden = true;
+    });
+    $('nearby-btn').addEventListener('click', handleNearby);
     $('geo-btn').addEventListener('click', handleGeolocation);
+    $('update-reload-btn').addEventListener('click', function () {
+      // cache: 'reload' skips the browser cache for this load. Without it the
+      // reload can be answered from the very cache that made the page stale;
+      // the server still revalidates by ETag afterwards, so this costs one
+      // full fetch and then settles back to 304s.
+      window.location.reload();
+    });
+    $('update-dismiss-btn').addEventListener('click', function () {
+      state.updateDismissedBuild = state.updateSeenBuild;
+      setUpdateBannerVisible(false);
+    });
     $('radius-select').addEventListener('change', handleRadiusChange);
     $('spots-refresh').addEventListener('click', handleSpotsRefresh);
     $('chat-form').addEventListener('submit', function (event) {
@@ -2236,7 +2543,9 @@
   function mockRequest(path, options) {
     var url = new URL(path, window.location.href);
     if (url.pathname === '/health') {
-      return Promise.resolve({ status: 'ok', version: '0.1.0', mock_mode: true });
+      // No build id in mock mode: this page is not talking to a server that
+      // could have a newer one, so the update watch stays off.
+      return Promise.resolve({ status: 'ok', version: '0.1.0', build: '', mock_mode: true });
     }
     if (url.pathname === '/api/fish-activity') {
       return Promise.resolve(makeMockFishActivity());
@@ -2503,22 +2812,32 @@
           navigation_url: 'https://uri.amap.com/marker?position=120.162,30.15&name=湘湖'
         }
     ];
+    // Apply the ring the same way the server does, so the mock does not report
+    // a range it did not honour. A mock that echoes the parameter but ignores
+    // it is worse than no mock: it looks like the feature works.
+    var minMetres = state.minRadiusKm * 1000;
+    var maxMetres = state.radiusKm * 1000;
+    var inRing = allSpots.filter(function (spot) {
+      return spot.distance_m >= minMetres && spot.distance_m <= maxMetres;
+    });
     return {
       user_location: {
         wgs84: { lat: state.lat, lon: state.lon },
         gcj02: { lat: 30.2756, lon: 120.1598 }
       },
-      spots: allSpots,
+      spots: inRing,
       filtered: {
-        total_candidates: 9,
+        total_candidates: allSpots.length,
+        within_min_radius: allSpots.length - inRing.length,
         forbidden: 1,
-        over_two_hours: 2,
-        eligible: allSpots.length,
-        returned: allSpots.length,
+        over_two_hours: 0,
+        eligible: inRing.length,
+        returned: inRing.length,
         truncated_by_limit: 0
       },
       meta: {
         mock_mode: true,
+        min_radius_km: state.minRadiusKm,
         radius_km: state.radiusKm,
         round_trip_limit_seconds: 7200,
         traffic_basis: 'baseline_estimate',
@@ -2642,7 +2961,7 @@
 
   function init() {
     syncLocationUI();
-    $('radius-select').value = String(state.radiusKm);
+    $('radius-select').value = state.minRadiusKm + '-' + state.radiusKm;
     bindEvents();
     initPwa();
     if (state.mockMode) {
@@ -2650,6 +2969,7 @@
       setStatus('当前为前端 Mock 演示（?mock=1），数据仅用于界面自查。', 'info', true);
     } else {
       checkHealth();
+      startUpdateWatch();
     }
     refreshAll();
     updateChatControls();

@@ -43,6 +43,13 @@ _DEFAULT_FISH_SCORE = 60
 _DEFAULT_FISH_BAND = "一般"
 _MAX_EVALUATED_CANDIDATES = 30
 _MIN_EVALUATION_BATCH = 10
+# How many extra candidates beyond a full page are worth measuring, and the
+# floor the pool never goes below. The floor exists because a good spot that
+# nobody measured cannot be returned: with scattered qualifying candidates, a
+# shallow pool came back with two cards where the deeper one filled five.
+_POOL_SLACK = 6
+_POOL_FLOOR = 30
+_SELECTION_STRATEGY = "sector_greedy_spacing"
 _BATCH_SCREEN_LIMIT = 100
 
 # A full recommendation costs ~60 AMap drive calls (two per evaluated spot), so
@@ -72,13 +79,23 @@ def reset_spot_cache() -> None:
 
 
 def _spot_cache_key(
-    *, lat: float, lon: float, radius_km: float, limit: int, species: str | None, offset: int
+    *,
+    lat: float,
+    lon: float,
+    min_radius_km: float,
+    radius_km: float,
+    limit: int,
+    species: str | None,
+    offset: int,
 ) -> tuple:
     # Coordinates are rounded to ~100 m so trivial GPS jitter still hits the
     # cache; anything finer would produce a new key per request and never hit.
+    # The inner radius is part of the key: 10~50 km and 0~50 km are different
+    # searches and would otherwise answer each other.
     return (
         round(lat, 3),
         round(lon, 3),
+        round(float(min_radius_km), 2),
         round(float(radius_km), 2),
         int(limit),
         species or "",
@@ -325,6 +342,308 @@ async def _order_by_batch_return(
     return [screened[index] for index in order] + candidates[_BATCH_SCREEN_LIMIT:]
 
 
+# --- Spreading the recommendation out -------------------------------------
+#
+# The evaluation loop stops as soon as it has ``limit`` usable spots, and it
+# walks candidates in travel-time order, so the returned set used to be the
+# nearest handful that happened to fit: measured from Chengdu, five spots inside
+# 7.7 km with a 80 km search radius. Two separate causes stacked up:
+#
+#   1. Only the first batch was ever looked at. With 448 candidates, 438 were
+#      never evaluated, so any distant-but-good spot could not be selected.
+#   2. Ranking is 0.65 * fish_score + 0.35 * travel_score, and fish_score is
+#      computed once at the user's location -- identical for every candidate
+#      bar a +3 downwind bonus. Ranking therefore degenerates to "shortest
+#      round trip", and sorting then picking the top N can only ever return a
+#      cluster around the user.
+#
+# Fixing (2) properly means scoring each spot's own weather, which is a
+# separate change (one more upstream call per candidate). What this does
+# instead is make the *candidate pool* spatial and then enforce spacing, so a
+# good spot further out can win when it is genuinely better on the numbers we
+# already have.
+
+_SECTOR_COUNT = 8
+# Distance bands drawn from inside each sector, so the pool reaches across the
+# search radius instead of hugging the user.
+_POOL_DISTANCE_BANDS = 4
+_MIN_SEPARATION_RATIO = 0.35
+_MIN_SEPARATION_FLOOR_M = 3_000.0
+_MIN_SEPARATION_CEIL_M = 25_000.0
+
+
+def _bearing_sector(origin_gcj: LatLon, candidate: SpotCandidate) -> int:
+    """Compass sector (0-7) of the candidate as seen from the user."""
+    d_lat = candidate.location_gcj02.lat - origin_gcj.lat
+    d_lon = (candidate.location_gcj02.lon - origin_gcj.lon) * math.cos(
+        math.radians(origin_gcj.lat)
+    )
+    if d_lat == 0 and d_lon == 0:
+        return 0
+    angle = math.degrees(math.atan2(d_lat, d_lon)) % 360.0
+    return int(angle // (360.0 / _SECTOR_COUNT)) % _SECTOR_COUNT
+
+
+def _sector_balanced_pool(
+    origin_gcj: LatLon,
+    candidates: list[SpotCandidate],
+    slots: int,
+) -> list[SpotCandidate]:
+    """Sample the candidate set across directions *and* distances.
+
+    Balancing by direction alone is not enough, and the measurement is the
+    reason: from Chengdu with a 150 km radius, 1246 candidates were recalled,
+    the pool took the nearest few per compass sector, and every one of the 28
+    that survived filtering was still inside 11 km. Each sector contributed
+    its closest candidates, and the closest candidates to a city centre form a
+    tight ring no matter which direction they lie in.
+
+    So each sector is split into distance bands and drawn from evenly. A band
+    yields its nearest member, which keeps the choice meaningful inside the
+    band while making the pool cover the whole search area.
+    """
+    if not candidates or slots >= len(candidates):
+        return list(candidates)
+
+    buckets: dict[int, list[SpotCandidate]] = {}
+    for candidate in candidates:
+        buckets.setdefault(_bearing_sector(origin_gcj, candidate), []).append(candidate)
+
+    # Bands are cut by *distance*, not by candidate count. Splitting the count
+    # evenly fails on exactly the data this exists for: when 90% of candidates
+    # sit within 10 km of the user, an equal-count fourth band still lands
+    # inside those 10 km, and the pool never reaches the rest of a 150 km
+    # radius. Measured on synthetic data shaped like the real one, count-bands
+    # gave a pool topping out at 9.8 km out of 150.
+    farthest = max(_candidate_distance_m(origin_gcj, candidate) for candidate in candidates)
+    span = max(farthest, 1.0)
+    bands = max(1, min(_POOL_DISTANCE_BANDS, math.ceil(slots / len(buckets))))
+    ordered: list[SpotCandidate] = []
+    for sector in sorted(buckets):
+        bucket = buckets[sector]
+        per_band, leftover = divmod(max(1, slots // len(buckets)), bands)
+        for band_index in range(bands):
+            if len(ordered) >= slots:
+                break
+            low = span * band_index / bands
+            high = span * (band_index + 1) / bands
+            band = [
+                candidate
+                for candidate in bucket
+                if low <= _candidate_distance_m(origin_gcj, candidate) < high
+                or (band_index == bands - 1 and
+                    _candidate_distance_m(origin_gcj, candidate) >= low)
+            ]
+            if not band:
+                continue
+            take = per_band + (1 if band_index < leftover else 0)
+            ordered.extend(band[:take])
+    # Top up if the bands under-filled (a sector empty in some band), keeping
+    # input order so the nearest candidates still serve as the fallback.
+    if len(ordered) < slots:
+        seen = {id(candidate) for candidate in ordered}
+        for candidate in candidates:
+            if len(ordered) >= slots:
+                break
+            if id(candidate) not in seen:
+                ordered.append(candidate)
+    return ordered[:slots]
+
+
+def _interleave_sectors(
+    origin_gcj: LatLon,
+    candidates: list[SpotCandidate],
+) -> list[SpotCandidate]:
+    """Round-robin across distance rings *and* sectors.
+
+    This decides which candidates get evaluated first, and that matters:
+    evaluation stops as soon as enough qualify, so anything not measured is
+    lost for good -- it has no drive estimate to be ranked by.
+
+    Rotating over sectors alone is not enough. Each sector's queue is ordered
+    by return time, so every sector's first entry is one of the nearest
+    candidates; the first pass then returns eight spots in the same small
+    ring. Rings must rotate too, otherwise the whole exercise only spreads the
+    result by direction.
+
+    Within a (ring, sector) cell, the caller's order is preserved, so the
+    best-ranked candidate there still goes first.
+    """
+    if not candidates:
+        return []
+    farthest = max(_candidate_distance_m(origin_gcj, candidate) for candidate in candidates)
+    span = max(farthest, 1.0)
+    rings = _POOL_DISTANCE_BANDS
+
+    cells: dict[tuple[int, int], list[SpotCandidate]] = {}
+    for candidate in candidates:
+        ring = min(
+            rings - 1,
+            int(_candidate_distance_m(origin_gcj, candidate) / span * rings),
+        )
+        cells.setdefault((ring, _bearing_sector(origin_gcj, candidate)), []).append(candidate)
+
+    # Take one candidate per ring per pass, so the first pass already spans the
+    # radius. Sectors rotate on a slower wheel than rings: with few slots, going
+    # round the sectors first would spend the whole budget on the innermost
+    # ring, which is exactly the clustering this is meant to avoid.
+    ordered: list[SpotCandidate] = []
+    pass_index = 0
+    while len(ordered) < len(candidates):
+        progressed = False
+        for ring in range(rings):
+            # One from each ring per pass, so the first pass alone spans the
+            # whole radius. Draining a ring's sectors before starting the next
+            # ring is what kept the head of the list inside the innermost band.
+            sectors = sorted({s for r, s in cells if r == ring})
+            if not sectors:
+                continue
+            # Rotate the sector per pass, so ring 0 does not always give up its
+            # first direction.
+            start = pass_index % len(sectors)
+            for offset in range(len(sectors)):
+                cell = cells[(ring, sectors[(start + offset) % len(sectors)])]
+                if cell:
+                    ordered.append(cell.pop(0))
+                    progressed = True
+                    break
+        if not progressed:
+            break
+        pass_index += 1
+    return ordered
+
+
+def _separation_target_m(radius_m: float, limit: int) -> float:
+    """How far apart two returned spots should ideally be.
+
+    Scaled by the search radius, so a 5 km search is not expected to yield
+    spots 20 km apart, and capped by what the radius can accommodate: asking
+    for ``limit`` spots spread over a circle of radius R, the usable spacing is
+    about 2R/limit. Taking the *minimum* of the two keeps a small search tight
+    and a large one genuinely spread.
+    """
+    span = max(radius_m, 1.0)
+    by_radius = span * _MIN_SEPARATION_RATIO
+    by_budget = span * 2.0 / max(limit, 1)
+    target = min(by_radius, by_budget)
+    return max(_MIN_SEPARATION_FLOOR_M, min(_MIN_SEPARATION_CEIL_M, target))
+
+
+def _water_key_text(name: str) -> str:
+    """Name with the usual AMap decorations stripped.
+
+    AMap lists one river as several POIs -- "府河", "府河(锦江)", "锦江" are the
+    same water body, and a page showing three cards that all say 府河 gives the
+    user no choice to make. Parentheticals carry a district or a road rather
+    than a different river, so they are dropped for comparison.
+    """
+    text = name or ""
+    for opener, closer in (("(", ")"), ("（", "）")):
+        while opener in text and closer in text:
+            start = text.index(opener)
+            end = text.index(closer, start)
+            text = text[:start] + text[end + 1 :]
+    return text.replace(" ", "").strip()
+
+
+def _collapse_duplicate_candidates(
+    candidates: list[SpotCandidate],
+) -> list[SpotCandidate]:
+    """Same dedup, applied to the pool *before* any drive estimate is spent.
+
+    Doing it only after evaluation wastes budget measuring the same river three
+    times and then throws two of those measurements away -- and because
+    evaluation stops once enough candidates qualify, the duplicates can also
+    eat the slots that a distinct water needed.
+    """
+    seen: set[str] = set()
+    kept: list[SpotCandidate] = []
+    for candidate in candidates:
+        key = _water_key_text(candidate.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(candidate)
+    return kept
+
+
+def _min_pairwise_distance(spots: list[SpotOut]) -> float:
+    """Smallest gap between any two of these spots; 0 when fewer than two."""
+    smallest = math.inf
+    for index, spot in enumerate(spots):
+        for other in spots[index + 1 :]:
+            smallest = min(
+                smallest,
+                haversine_m(
+                    spot.location_gcj02.lat,
+                    spot.location_gcj02.lon,
+                    other.location_gcj02.lat,
+                    other.location_gcj02.lon,
+                ),
+            )
+    return smallest if math.isfinite(smallest) else 0.0
+
+
+def _interleave_by_spacing(
+    spots: list[SpotOut],
+    target_separation_m: float,
+) -> tuple[list[SpotOut], bool]:
+    """Reorder a ranked list so consecutive picks are far apart.
+
+    Greedy: take the best remaining spot that clears the target from everything
+    already taken, and halve the target when nothing does. Every spot is kept --
+    this only changes the order, so paging never loses a candidate and page 2
+    cannot repeat one from page 1.
+
+    Ordering by this rule is what makes a page spread out: page 1 is the first
+    ``limit`` picks of the interleaved sequence, so it alternates between the
+    different parts of the search area instead of draining the top-ranked
+    cluster first.
+    """
+    remaining = sorted(
+        spots, key=lambda s: (-s.total_score, s.drive_seconds_round_trip, s.id)
+    )
+    ordered: list[SpotOut] = []
+    relaxed = False
+    separation = float(target_separation_m)
+    while remaining:
+        if not ordered:
+            # Nothing to be far from yet, so the best candidate goes first.
+            ordered.append(remaining.pop(0))
+            continue
+
+        picked_index = next(
+            (
+                index
+                for index, spot in enumerate(remaining)
+                if min(
+                    haversine_m(
+                        spot.location_gcj02.lat,
+                        spot.location_gcj02.lon,
+                        other.location_gcj02.lat,
+                        other.location_gcj02.lon,
+                    )
+                    for other in ordered
+                )
+                >= separation
+            ),
+            None,
+        )
+        if picked_index is None:
+            # Nothing clears the bar. Halve it and look again -- falling through
+            # to pop(None) here is what would crash. Once the bar is under a
+            # metre the best remaining is accepted, because every candidate must
+            # still appear or paging would silently drop spots.
+            relaxed = True
+            separation /= 2.0
+            if separation < 1.0:
+                separation = 0.0
+                ordered.append(remaining.pop(0))
+            continue
+        ordered.append(remaining.pop(picked_index))
+    return ordered, relaxed
+
+
 async def _evaluate_candidate(
     provider: GeoProvider,
     origin: LatLon,
@@ -390,11 +709,13 @@ async def build_spot_recommendations(
     limit: int,
     species: str | None,
     offset: int = 0,
+    min_radius_km: float = 0.0,
 ) -> SpotRecommendationResponse:
     normalized_species = validate_species(species)
     cache_key = _spot_cache_key(
         lat=lat,
         lon=lon,
+        min_radius_km=min_radius_km,
         radius_km=radius_km,
         limit=limit,
         species=normalized_species,
@@ -419,9 +740,25 @@ async def build_spot_recommendations(
         weather_provider, lat, lon, departure, normalized_species
     )
 
+    # A ring search, not just a cap: "10~50 km" means the near field is excluded
+    # too. Done first, so every counter below describes the ring rather than the
+    # whole circle -- otherwise ``forbidden`` would include spots the user ruled
+    # out by distance and the filtered invariants would not add up.
+    if min_radius_km > 0:
+        min_radius_m = min_radius_km * 1000.0
+        in_ring = [
+            candidate
+            for candidate in candidates
+            if _candidate_distance_m(origin_gcj, candidate) >= min_radius_m
+        ]
+        min_ring_skipped = len(candidates) - len(in_ring)
+    else:
+        in_ring = candidates
+        min_ring_skipped = 0
+
     forbidden = 0
     evaluable: list[SpotCandidate] = []
-    for candidate in candidates:
+    for candidate in in_ring:
         if forbidden_reason(candidate.name, candidate.location_gcj02):
             forbidden += 1
             continue
@@ -429,11 +766,54 @@ async def build_spot_recommendations(
     evaluable.sort(
         key=lambda candidate: (_candidate_distance_m(origin_gcj, candidate), candidate.id)
     )
+    # One entry per distinct water before spending anything on drive estimates.
+    # AMap returns a river as several POIs; measuring all of them costs quota
+    # and latency to learn the same answer, and the duplicates then compete
+    # with the distinct waters for the page.
+    distinct_pool = _collapse_duplicate_candidates(evaluable)
+    duplicate_count = len(evaluable) - len(distinct_pool)
+    if distinct_pool:
+        evaluable = distinct_pool
+    # Report against everything that survived filtering, before the pool narrows
+    # it. The field means "candidates we did not evaluate", and the reader's
+    # question is how much of the search was skipped. Duplicates are folded in
+    # here rather than tracked as a fourth bucket: they were recalled but never
+    # evaluated, which is exactly what ``unevaluated`` counts.
+    total_evaluable = len(evaluable) + duplicate_count
+    # Build the evaluation pool from every direction and every distance ring,
+    # not just the nearest candidates.
+    #
+    # The pool is deliberately small. A wide pool looks like the obvious answer
+    # and is not: measured from Chengdu at a 150 km radius, spreading 40
+    # candidates across the radius and evaluating 30 cost three times the drive
+    # calls of the old code and returned *fewer* spots (8 instead of 10),
+    # because most of the far ring fails the two-hour round trip. Paying three
+    # times as much to show less is not a trade worth making. A pool of
+    # ``limit + 4`` keeps the cost near the old one while still letting the
+    # batch come from different places.
+    # The pool must stay deep. Shrinking it to ``limit + slack`` looked cheaper
+    # and returned fewer spots: with candidates that are good but scattered,
+    # a shallow pool never reaches them, so a case that used to fill five cards
+    # came back with two. Depth is also what makes the spread meaningful.
+    wanted = max(_POOL_FLOOR, offset + limit + _POOL_SLACK)
+    batch = max(limit, _MIN_EVALUATION_BATCH)
+    pool_size = min(
+        len(evaluable),
+        math.ceil(wanted / batch) * batch,
+    )
+    evaluable = _sector_balanced_pool(origin_gcj, evaluable, pool_size)
     evaluable = await _order_by_batch_return(geo_provider, origin, evaluable)
+    # Then interleave, so the batch actually spans the pool instead of draining
+    # its nearest edge. Evaluation stops once enough candidates qualify, and a
+    # candidate that is never measured cannot be brought back later -- it has
+    # no drive estimate to rank with.
+    evaluable = _interleave_sectors(origin_gcj, evaluable)
 
     target_eligible = offset + limit
     batch_size = max(limit, _MIN_EVALUATION_BATCH)
-    evaluation_cap = min(len(evaluable), _MAX_EVALUATED_CANDIDATES)
+    # The cap follows the pool: the pool is what was chosen to be worth
+    # measuring, so it is also what the budget allows.
+    evaluation_cap = min(len(evaluable), max(target_eligible, len(evaluable)))
     evaluated = 0
     unavailable = 0
     over_two_hours = 0
@@ -466,9 +846,22 @@ async def build_spot_recommendations(
         if len(eligible) >= target_eligible:
             break
 
-    unevaluated = len(evaluable) - evaluated
+    unevaluated = total_evaluable - evaluated
     eligible.sort(key=lambda spot: (-spot.total_score, spot.drive_seconds_round_trip, spot.id))
-    returned = eligible[offset : offset + limit]
+    # Spreading has to see the whole ranked set, not one page: cutting it to a
+    # page-sized pool first would leave the same near-neighbours, and paging
+    # after that could still repeat a spot across pages. Interleaving the full
+    # set and then slicing keeps pages disjoint and every page spread alike.
+    target_gap = _separation_target_m(radius_m, limit)
+    spread, relaxed = _interleave_by_spacing(eligible, target_gap)
+    # Spreading decides *which* spots come back and in what order they are
+    # paged, but the list shown to the user stays ranked best-first -- that is
+    # what the card order promises, and the previous contract guaranteed it.
+    returned = spread[offset : offset + limit]
+    returned.sort(key=lambda spot: (-spot.total_score, spot.drive_seconds_round_trip, spot.id))
+    # Report the gap this page actually achieves -- that is the number a reader
+    # checking "is this really spread out?" wants, not the target we aimed for.
+    separation_m = _min_pairwise_distance(returned)
 
     response = SpotRecommendationResponse(
         user_location=UserLocationOut(
@@ -478,6 +871,7 @@ async def build_spot_recommendations(
         spots=returned,
         filtered=FilteredStats(
             total_candidates=len(candidates),
+            within_min_radius=min_ring_skipped,
             forbidden=forbidden,
             unavailable=unavailable,
             over_two_hours=over_two_hours,
@@ -489,10 +883,14 @@ async def build_spot_recommendations(
         ),
         meta=SpotsMeta(
             mock_mode=settings.mock_mode,
+            min_radius_km=min_radius_km,
             radius_km=radius_km,
             round_trip_limit_seconds=ROUND_TRIP_LIMIT_SECONDS,
             traffic_basis=TRAFFIC_BASIS,
             generated_at=utc_timestamp(),
+            selection_strategy=_SELECTION_STRATEGY,
+            min_separation_m=int(round(separation_m)),
+            separation_relaxed=relaxed,
         ),
     )
     _write_spot_cache(cache_key, response, time.monotonic())

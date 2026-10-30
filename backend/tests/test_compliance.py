@@ -124,3 +124,99 @@ def test_chat_response_compliance(client):
     serialized = response.text
     for pattern in PROMISE_PATTERNS:
         assert pattern not in serialized, f"对话响应含承诺性表述：{pattern}"
+
+
+# --- 定位失败必须说真话 -----------------------------------------------------
+#
+# 实故障（2026-10-29，真机）：用 http 访问局域网 IP 时 isSecureContext=false，
+# 浏览器把「根本不提供定位」也报成 PERMISSION_DENIED（code 1），前端于是统一
+# 提示「定位权限被拒绝」。用户去找一个永远改不好的权限开关，而真正的原因是
+# 地址不是 https。这与把服务超时说成「不支持的图片格式」是同一类错误。
+
+
+def test_geolocation_checks_secure_context_before_blaming_permission():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+
+    # 必须先分辨非安全上下文，再进入 getCurrentPosition。
+    secure_at = body.find("isSecureContext")
+    call_at = body.find("getCurrentPosition")
+    assert secure_at != -1, "定位逻辑未检查 isSecureContext，http 下必然谎报权限被拒"
+    assert call_at != -1
+    assert secure_at < call_at, "isSecureContext 检查必须在调用定位之前"
+
+
+def test_geolocation_rejection_message_is_not_the_only_code_1_explanation():
+    """code 1 有两种原因，提示里不能只说「权限被拒绝」这一种。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+    assert "不是权限问题" in body, "非安全上下文的提示需明确排除权限原因"
+
+
+def test_geolocation_hides_stale_picker_results():
+    """点了定位却仍显示上次搜索的列表，会让人以为定位没生效。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function handleGeolocation()")
+    end = app_js.index("function hidePlaceLists", start)
+    body = app_js[start:end]
+    assert "hidePlaceLists()" in body
+
+
+#
+# 版本提示（2026-10-30）：用户要在界面上知道有新版本，并在自己想的时候升级。
+#
+# 两条约束来自这个页面自己的性质，不是偏好：
+#   1. 不能自动刷新——表单、已选鱼获照片、对话都只在内存里（照片明确不落盘），
+#      静默 reload 会把这些直接吞掉。
+#   2. 关闭后再弹就只是噪音：按 build 记住「稍后再说」。
+
+
+def test_update_is_offered_not_forced():
+    """发现新版本只能提示，刷新必须由用户点。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function showUpdateBanner")
+    end = app_js.index("function checkForUpdate", start)
+    body = app_js[start:end]
+    assert "reload" not in body, "提示逻辑不得直接刷新页面"
+    # How the banner is revealed is an implementation detail; that it is revealed
+    # when the server build differs is not.
+    assert "setUpdateBannerVisible(true)" in body
+
+
+def test_update_banner_is_visible_wherever_the_reader_has_scrolled():
+    """提示条必须贴在视口上，不能放在文档流顶部。
+
+    部署发生在任意时刻，手机上用户通常早已滚到 Step 3 或对话区。放在文档
+    顶部的提示条会被截在视口上方一两千像素处——元素"显示了"，但没人看得见。
+    """
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function setUpdateBannerVisible" in app_js, (
+        "banner 的显隐要收在一处，否则固定定位需要的 body 留白会漏掉"
+    )
+
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    start = css.index(".update-banner {")
+    body = css[start : css.index("}", start)]
+    assert "position: fixed" in body, "提示条必须脱离文档流固定在视口上"
+
+    index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert "has-update-banner" not in index_html, "留白类应由脚本按显隐切换添加"
+
+
+def test_update_dismissal_is_per_build():
+    """「稍后再说」要按 build 记住，否则下一轮轮询又把提示弹回来。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "updateDismissedBuild === serverBuild" in app_js
+
+
+def test_update_watch_ignores_uninjected_pages():
+    """占位符没被替换时不能当成 build id，否则每次轮询都报「有新版本」。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "__FISHAGENT_BUILD__" in app_js
+    index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'name="fishagent-build"' in index_html
+

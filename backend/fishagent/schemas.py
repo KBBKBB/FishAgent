@@ -119,6 +119,35 @@ class FishActivityResponse(BaseModel):
     generated_at: str
 
 
+class PlaceCandidate(BaseModel):
+    """A location the user can pick as their starting point.
+
+    Coordinates are WGS84: AMap answers in GCJ-02 and the provider converts at
+    its own boundary, so everything above that is one datum.
+    """
+
+    name: str
+    address: str = ""
+    lat: float
+    lon: float
+    # "place" for text search; the water type ("湖泊"/"河流"…) for nearby water.
+    kind: str = "place"
+    distance_m: int | None = None
+
+
+class PlaceSearchResponse(BaseModel):
+    """Location-picker results.
+
+    ``resolved`` separates "searched, nothing found" from "this provider cannot
+    search at all", so the UI can offer the manual form as the right next step
+    instead of telling the user their place does not exist.
+    """
+
+    results: list[PlaceCandidate]
+    query: str = ""
+    resolved: bool = True
+
+
 class SpotCandidate(BaseModel):
     id: str
     name: str
@@ -155,6 +184,10 @@ class UserLocationOut(BaseModel):
 
 class FilteredStats(BaseModel):
     total_candidates: int = Field(ge=0)
+    # Recalled candidates closer than the ring's inner edge. Without this the
+    # invariants below would not add up for a 10~50 km search, and a reader
+    # could not tell "excluded for being too near" from "never found".
+    within_min_radius: int = Field(default=0, ge=0)
     forbidden: int = Field(ge=0)
     unavailable: int = Field(default=0, ge=0)
     over_two_hours: int = Field(ge=0)
@@ -167,10 +200,20 @@ class FilteredStats(BaseModel):
 
 class SpotsMeta(BaseModel):
     mock_mode: bool
+    # The ring the search covered; equal when min is 0, which is the plain
+    # "everything within radius_km" case.
+    min_radius_km: float = 0.0
     radius_km: float
     round_trip_limit_seconds: int
     traffic_basis: str
     generated_at: str
+    # How the returned set was spread out. Reported so a clustered-looking
+    # result can be told apart from a strategy that did not run: min_separation_m
+    # is the distance finally enforced, and separation_relaxed says the
+    # requested spread could not be met and had to be widened.
+    selection_strategy: str = "score"
+    min_separation_m: int = 0
+    separation_relaxed: bool = False
 
 
 class SpotRecommendationResponse(BaseModel):
@@ -222,6 +265,9 @@ class SpeciesRecommendationResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+    # Content hash of the served H5 shell; lets an open page notice a deploy.
+    # Empty only if the web directory is missing.
+    build: str = ""
     mock_mode: bool
 
 

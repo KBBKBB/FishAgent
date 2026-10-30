@@ -8,12 +8,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.routing import Match
 from starlette.types import Scope
 
 from fishagent import __version__
 from fishagent.api.fish_activity import router as fish_router
+from fishagent.api.geo import router as geo_router
 from fishagent.api.identify import router as identify_router
 from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
@@ -25,6 +25,7 @@ from fishagent.pilot import get_pilot_state
 from fishagent.pilot.middleware import PilotAccessMiddleware, quota_exceeded_handler
 from fishagent.pilot.router import router as pilot_router
 from fishagent.providers.base import UpstreamQuotaExceeded
+from fishagent.static_build import BuildIdHolder, ShellStaticFiles
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(meta_router)
     app.include_router(fish_router)
     app.include_router(spots_router)
+    app.include_router(geo_router)
     app.include_router(species_router)
     app.include_router(_agent_router())
     app.include_router(identify_router)
@@ -157,7 +159,20 @@ def create_app() -> FastAPI:
         )
 
     if WEB_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+        # The build id answers "which version is this client running?". It is
+        # computed from the file contents so nobody has to remember to bump it,
+        # and it is attached here so /health and the HTML injection can never
+        # disagree about it.
+        app.state.build_id = BuildIdHolder(WEB_DIR)
+        app.mount(
+            "/",
+            ShellStaticFiles(
+                directory=str(WEB_DIR),
+                html=True,
+                build_id=app.state.build_id.get,
+            ),
+            name="web",
+        )
     else:  # pragma: no cover - defensive for partial checkouts
         logger.warning("web directory not found at %s", WEB_DIR)
 

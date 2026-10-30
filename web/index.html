@@ -10,6 +10,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="FishAgent">
   <meta name="mobile-web-app-capable" content="yes">
+  <!-- Replaced by the server with the content hash of this build. The page
+       compares it against /health to notice that a newer version has been
+       deployed, so the value has to be the one actually served -- never
+       hardcoded here. -->
+  <meta name="fishagent-build" content="__FISHAGENT_BUILD__">
   <title>FishAgent · 鱼情与钓位助手</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%230e6b52'/%3E%3Cpath d='M9 24c6.5-8.5 15.5-11 23-7.5 2.6 1.2 4.5 3.4 6 6-1.5 2.7-3.4 4.9-6 6-7.5 3.5-16.5 1-23-7.5Z' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linejoin='round'/%3E%3Ccircle cx='18' cy='21.7' r='1.7' fill='%23fff'/%3E%3C/svg%3E">
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
@@ -67,19 +72,51 @@
         </div>
         <div class="location-row">
           <button type="button" class="btn btn-primary" id="geo-btn">使用我的定位</button>
-          <span class="hint">或手动输入 WGS84 坐标（GPS 原始坐标）</span>
         </div>
-        <form class="coord-form" id="coord-form" novalidate>
-          <label class="field">
-            <span>纬度</span>
-            <input id="lat-input" name="lat" type="number" inputmode="decimal" step="0.0001" min="-90" max="90" required>
+
+        <form class="place-form" id="place-form" role="search" novalidate>
+          <label class="field place-field">
+            <span>搜索地名或钓点</span>
+            <input
+              id="place-input"
+              name="q"
+              type="search"
+              inputmode="search"
+              autocomplete="off"
+              enterkeyhint="search"
+              maxlength="60"
+              placeholder="例如：青龙湖、三岔湖、黑龙滩水库">
           </label>
-          <label class="field">
-            <span>经度</span>
-            <input id="lon-input" name="lon" type="number" inputmode="decimal" step="0.0001" min="-180" max="180" required>
-          </label>
-          <button type="submit" class="btn btn-secondary">更新分析</button>
+          <button type="submit" class="btn btn-secondary" id="place-search-btn">搜索</button>
         </form>
+        <div class="place-results" id="place-results" hidden>
+          <div class="place-results-head">
+            <span id="place-results-label">搜索结果</span>
+            <button type="button" class="link-btn" id="place-results-close">收起</button>
+          </div>
+          <ul class="place-list" id="place-list" role="listbox" aria-labelledby="place-results-label"></ul>
+        </div>
+
+        <div class="nearby-block">
+          <button type="button" class="link-btn" id="nearby-btn">看看附近有哪些水域</button>
+          <ul class="place-list" id="nearby-list" role="listbox" aria-label="附近水域" hidden></ul>
+        </div>
+
+        <details class="coord-details" id="coord-details">
+          <summary>高级：手动输入坐标</summary>
+          <p class="hint">已知精确的 WGS84 坐标（GPS 原始坐标）时可直接填写，用于核对具体岸边位置。</p>
+          <form class="coord-form" id="coord-form" novalidate>
+            <label class="field">
+              <span>纬度</span>
+              <input id="lat-input" name="lat" type="number" inputmode="decimal" step="0.0001" min="-90" max="90" required>
+            </label>
+            <label class="field">
+              <span>经度</span>
+              <input id="lon-input" name="lon" type="number" inputmode="decimal" step="0.0001" min="-180" max="180" required>
+            </label>
+            <button type="submit" class="btn btn-secondary">更新分析</button>
+          </form>
+        </details>
         <p class="hint" id="geo-status" role="status" aria-live="polite"></p>
       </section>
 
@@ -95,17 +132,19 @@
       </section>
 
       <section class="card" aria-labelledby="spots-title">
-        <div class="card-head">
+        <div class="card-head card-head-tools">
           <div>
             <p class="eyebrow">Step 3 · 钓位</p>
             <h2 id="spots-title">附近钓位</h2>
           </div>
           <div class="spots-tools">
             <label class="radius-field" for="radius-select">
-              <span>搜索半径</span>
-              <select id="radius-select" name="radius_km">
-                <option value="50" selected>50 km</option>
-                <option value="100">100 km</option>
+              <span>搜索范围</span>
+              <select id="radius-select" name="radius_range">
+                <option value="0-10" selected>0–10 km</option>
+                <option value="10-50">10–50 km</option>
+                <option value="50-100">50–100 km</option>
+                <option value="100-150">100–150 km</option>
               </select>
             </label>
             <span class="pill pill-soft">往返 ≤ 2 小时</span>
@@ -169,6 +208,22 @@
       <p class="footer-meta">坐标系统 WGS84 · 导航由高德地图提供服务 · 页面不包含任何 API Key</p>
     </div>
   </footer>
+
+  <!-- Shown when the server reports a newer build than the one this page is
+       running. Reloading is the user's call, never automatic: the page holds
+       form input, a selected catch photo and the conversation in memory only,
+       so a silent reload would throw work away.
+
+       Pinned to the bottom of the viewport rather than placed in the page.
+       A deploy lands while the reader may be scrolled down to Step 3 or the
+       chat, and a notice at the top of the document is then thousands of
+       pixels above the screen -- shown, but never seen. -->
+  <div class="update-banner" id="update-banner" role="status" aria-live="polite" hidden>
+    <span class="update-dot" aria-hidden="true"></span>
+    <span class="update-copy">FishAgent 有新版本可用。</span>
+    <button type="button" class="update-reload" id="update-reload-btn">立即更新</button>
+    <button type="button" class="hint-close update-dismiss" id="update-dismiss-btn" aria-label="稍后再说">×</button>
+  </div>
 
   <script src="./app.js"></script>
 </body>

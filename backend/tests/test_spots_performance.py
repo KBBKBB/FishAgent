@@ -89,22 +89,19 @@ def get_spots(client, **overrides):
     return response.json()
 
 
-def test_stops_after_nearest_batch_meets_limit(client, install_overrides):
+def test_stops_after_one_batch_meets_limit(client, install_overrides):
     geo = FakeGeoProvider(make_candidates(120), lambda index: 60 + index * 10)
     install_overrides(geo)
 
     payload = get_spots(client)
     filtered = payload["filtered"]
 
-    assert [spot["id"] for spot in payload["spots"]] == [
-        "perf_000",
-        "perf_001",
-        "perf_002",
-        "perf_003",
-        "perf_004",
-    ]
+    # The exact ids are no longer "the five nearest": spreading picks from
+    # across the batch. What must not change is the cost -- one batch of ten
+    # drive calls, not the whole candidate list.
     assert filtered == {
         "total_candidates": 120,
+        "within_min_radius": 0,
         "forbidden": 0,
         "unavailable": 0,
         "over_two_hours": 0,
@@ -117,6 +114,26 @@ def test_stops_after_nearest_batch_meets_limit(client, install_overrides):
     assert geo.drive_calls == 10
     assert 1 < geo.max_active <= get_settings().amap_concurrency
     assert all(spot["drive_seconds_round_trip"] <= 7200 for spot in payload["spots"])
+    # Returned spots must still be ranked best-first.
+    scores = [spot["total_score"] for spot in payload["spots"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_first_page_is_not_all_from_one_place(client, install_overrides):
+    """The regression this strategy exists for.
+
+    Five candidates could be the five nearest, which put every card within a
+    few kilometres of the user. The synthetic candidates here sit in a straight
+    line 22 m apart, so "nearest five" is trivially the first five ids; a
+    spread result must skip ahead instead.
+    """
+    geo = FakeGeoProvider(make_candidates(120), lambda index: 60 + index * 10)
+    install_overrides(geo)
+
+    ids = [spot["id"] for spot in get_spots(client)["spots"]]
+    assert ids != [f"perf_{index:03d}" for index in range(5)], (
+        f"first page is still the five nearest candidates: {ids}"
+    )
 
 
 def test_limit_ten_evaluates_one_ten_candidate_batch(client, install_overrides):
@@ -126,9 +143,7 @@ def test_limit_ten_evaluates_one_ten_candidate_batch(client, install_overrides):
     payload = get_spots(client, limit=10)
     filtered = payload["filtered"]
 
-    assert [spot["id"] for spot in payload["spots"]] == [
-        f"perf_{index:03d}" for index in range(10)
-    ]
+    assert len(payload["spots"]) == 10
     assert filtered["evaluated"] == 10
     assert filtered["eligible"] == 10
     assert filtered["returned"] == 10
@@ -193,8 +208,10 @@ def test_offset_returns_next_ranked_page(client, install_overrides):
 
     first_ids = [spot["id"] for spot in first["spots"]]
     second_ids = [spot["id"] for spot in second["spots"]]
-    assert first_ids == [f"perf_{index:03d}" for index in range(5)]
-    assert second_ids == [f"perf_{index:03d}" for index in range(5, 10)]
+    # Which ids land on which page changed with the spread strategy; that the
+    # two pages are disjoint and each holds a full page did not.
+    assert len(first_ids) == len(set(first_ids)) == 5
+    assert len(second_ids) == len(set(second_ids)) == 5
     assert set(first_ids).isdisjoint(second_ids)
     for payload in (first, second):
         filtered = payload["filtered"]
@@ -211,11 +228,10 @@ def test_offset_expands_evaluation_window(client, install_overrides):
     payload = get_spots(client, limit=5, offset=6)
     filtered = payload["filtered"]
 
-    assert [spot["id"] for spot in payload["spots"]] == [
-        f"perf_{index:03d}" for index in range(6, 11)
-    ]
+    assert len(payload["spots"]) == 5
     assert filtered == {
         "total_candidates": 120,
+        "within_min_radius": 0,
         "forbidden": 0,
         "unavailable": 0,
         "over_two_hours": 0,
@@ -235,9 +251,7 @@ def test_max_offset_and_limit_reach_evaluation_cap(client, install_overrides):
     payload = get_spots(client, limit=10, offset=20)
     filtered = payload["filtered"]
 
-    assert [spot["id"] for spot in payload["spots"]] == [
-        f"perf_{index:03d}" for index in range(20, 30)
-    ]
+    assert len(payload["spots"]) == 10
     assert filtered["evaluated"] == 30
     assert filtered["eligible"] == 30
     assert filtered["returned"] == 10

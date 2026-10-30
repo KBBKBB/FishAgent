@@ -16,6 +16,14 @@
 > v2.3（2026-10-29）：4.6 `bing` Provider 改为**只搜地名**（原「{地名} 钓鱼」使 cn.bing 对每条查询都退化为字典页，召回率 0）；新增退化检测；新增 `source="typical"`——查过但没查到时按水域类型给参考值，文案与样式必须与「引用到具体来源」区分，`degraded` 与 `NullSpeciesProvider` 不给参考值。
 > v2.4（2026-10-29）：4.6 修复前后端超时赛跑——抓页阶段补上截止时间（此前能让整批被外层取消），前端 `SPECIES_TIMEOUT_MS` 4500→7500，晚于后端预算 + 网络往返。
 > v2.5（2026-10-29）：4.2 `water_depth` 改为由气温基准层 + F1/F2/F3/F4/F5/F7 修正推导，不再只看气温三分支（原实现使 5–32℃ 的每条请求返回同一句话）；`suitable_species` 与 `water_depth` 改读同一份决策计划，两者不再互相矛盾；劝退档不给水深策略、前端隐藏鱼种行。字段类型与位置不变。
+> v2.6（2026-10-29）：新增 4.5b `GET /api/geo/search`、`GET /api/geo/nearby`（位置选择器）。Step 1 主路径改为「搜地名 / 看附近」，经纬度输入收进「高级」折叠区；新增 `PlaceCandidate` / `PlaceSearchResponse` schema。
+> v2.6b（2026-10-29）：定位前检查 `isSecureContext`，非 https 时如实说明「不是权限问题」；定位成功后收起选择器列表并覆盖之前的选择。接口不变。
+> v2.7（2026-10-30，已被 v2.7c 回退）：8018 曾改为 HTTPS 并新增 `serve-https.bat`。
+> v2.7b（2026-10-30）：新增 `scripts/start-fishagent.vbs` 并装入 Windows 启动文件夹，登录后自动以隐藏方式拉起服务；仓库搬家需同步更新 `D:\FishAgent\repo-root.txt`。接口不变。
+> v2.7c（2026-10-30）：8018 与开机自启改回**明文 HTTP**（`serve.bat`）。手机端因此没有定位与 Service Worker，页面如实提示；`serve-https.bat` 保留备用。接口不变。
+> v2.8（2026-10-30）：新增 4.8 静态资源缓存与版本提示。shell 资源改 `no-cache`，`/health` 增加内容哈希 `build` 字段并注入 `index.html`，页面轮询发现新版本后提示、由用户自己点刷新。`/health` 响应新增 `build`（向后兼容的增量字段）。
+> v2.9（2026-10-30）：钓位推荐不再总是「离你最近的几个」——评估池按方向扇区 × 距离环取样，分页前做间距交错，同名水体先去重；`meta` 增加 `selection_strategy` / `min_separation_m` / `separation_relaxed` 三个增量字段。
+> v2.10（2026-10-30）：搜索半径改为**环带**。新增 `min_radius_km`（默认 0，旧调用行为不变），前端改为 0–10 / 10–50 / 50–100 / 100–150 四档；`filtered` 增加 `within_min_radius`，`meta` 增加 `min_radius_km`。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -96,8 +104,12 @@ fixtures/                         # 小产：演示场景
 ### 4.1 `GET /health`
 
 ```json
-{ "status": "ok", "version": "0.1.0", "mock_mode": true }
+{ "status": "ok", "version": "0.1.0", "build": "14c85f31a06a", "mock_mode": true }
 ```
+
+- `version`：API 版本，人工维护，不随部署变化。
+- `build`：**当前服务端 H5 资源的构建号**——对 `index.html` / `app.js` / `styles.css` / `sw.js` / `manifest.webmanifest` 内容做的 sha256 前 12 位（CRLF/LF 归一化，避免换行风格差异被当成新版本）。前端据此判断自己跑的是不是最新版。
+- 响应头固定 `Cache-Control: no-store`：这个端点正是前端用来判断"我是不是旧版"的，缓存住的答案会让它永远轮询到那个旧答案。
 
 ### 4.2 `GET /api/fish-activity`
 
@@ -205,7 +217,8 @@ fixtures/                         # 小产：演示场景
 | `lat` | float | 是 | WGS84 |
 | `lon` | float | 是 | WGS84 |
 | `species` | string | 否 | 目标鱼种 |
-| `radius_km` | float | 否 | 默认 100，范围 1–150 |
+| `radius_km` | float | 否 | 外圈半径，默认 100，范围 1–150 |
+| `min_radius_km` | float | 否 | 内圈半径，默认 0，范围 0–150。与 `radius_km` 构成**环带**，见下 |
 | `limit` | int | 否 | 默认 5，范围 1–10 |
 | `offset` | int | 否 | 默认 0，范围 0–20；在排序后的合格候选中跳过前 `offset` 个，用于“换一批” |
 
@@ -264,20 +277,30 @@ fixtures/                         # 小产：演示场景
 - 去程与回程分别取时长，过滤条件 `drive_seconds_out + drive_seconds_back <= 7200`；禁止用单程×2。
 - 有 `entr_location` 时必须用入口坐标；缺失回退中心点并置 `entry_precision="center_fallback"`，UI 标注「端点精度较低」。
 - 禁钓候选在返回前排除（Mock：名称黑名单 + 示例禁钓圆区；边界不明时保守排除）。
+- **搜索范围是环带，不是上限**（2026-10-30）：`min_radius_km`~`radius_km` 表示**只**返回落在这个区间内的钓位，内圈同样排除。`min_radius_km` 默认 0，因此不传时行为与旧版「半径上限」完全一致。**不做内圈排除的话，用户想看"远一点"时，返回的还是那几个最近的**——而最近的往往正是分数最高的，区间就白设了。
+  - 违例（`min_radius_km >= radius_km`，或越界）返回 422 `INVALID_RADIUS_RANGE`。空环带（如 50~50）视为笔误而非查询。
+  - 内圈排除**发生在禁钓过滤与取样之前**，因此 `filtered.forbidden` 等计数描述的都是环带内的情况，不会把用户按距离排除掉的候选算进禁钓数。
+  - 缓存键包含 `min_radius_km`：`10~50` 与 `0~50` 是两次不同搜索，共用一个键会让其中一次静默失效。
+  - **可能返回空**：环带内若不存在 2 小时内可往返的水域，结果就是空列表。这是「往返 ≤ 2 小时」这条硬规则的结果，不是搜索失败。实测成都 20km 以外没有任何水域满足该条件，因此 50–100、100–150 两档在成都稳定为空；前端文案会说明是「这段距离的水域往返都超过 2 小时」，不写成「换个位置试试」。
 - 排序：`total_score` 降序；同分按往返时长升序。`drive_seconds_out/back/round_trip` 均为整数秒；`drive_minutes_one_way = round_half_up(drive_seconds_out / 60)`（四舍五入到整数分钟）。
 - 往返均超过 2h 的候选不得出现在 `spots`，仅计入 `filtered.over_two_hours`。
 - **真实模式召回口径**：高德 around 使用 `types=190204|190205`（自然地名-河流/湖泊）、`sortrule=distance`、`extensions=all`；只保留 `typecode` 为 190204/190205 的水体，`110202` 仅在名称含湖/河/江/溪等水体词时保留。餐饮、住宅、学校、商场、KTV、道路以及经营部/商行/公司/工厂/建材/沙石/五金/超市/商店/门市/批发/经销/商贸等商业 POI 一律排除。
+- **同名水体先去重**（2026-10-30）：高德把一条河拆成多个 POI（`府河`、`府河(锦江)`、`锦江`），若不去重，一页会出现三张都叫「府河」的卡片，等于没有选择。去重在**评估之前**对候选池做，比较时剥掉括号与空格；这样既不会把配额浪费在同一个水域上，也不会出现"测了三条同名河、只剩一条能进页面"。实测成都 50km 首屏原本 5 张里有 3 张同名。
 - **真实模式评估口径**：候选先按直线距离排序；对最近 ≤100 个候选调用一次高德 `/v3/distance`（单终点、最多 100 起点）按回程时长重排；随后按批次（默认 `max(limit, 10)`，评估上限 30 个候选）对入围候选做去/回程分别路径精算，凑够 `offset+limit` 个合格候选即停（`offset+limit ≤ 30`）。批量距离仅用于排序，不替代去/回程精算；回程/去程值在基线路况下可能相同，但始终各调用一次。`unavailable` 表示路径规划失败，保守排除。
-- **分页口径**：按 `total_score` 降序（同分按往返时长升序）排序后返回 `eligible[offset:offset+limit]`；`offset=0` 与旧版首屏一致。每次请求重新召回、评估并排序，不做缓存；因此两次请求之间若路况/天气变化，批次内容可能变化，仅保证单次响应内无重复。
+- **评估池不只看最近的**（2026-10-30）：若直接取距离最近的一批来评估，远一点但更好的钓位永远没被测量过，页面只会反映用户脚下那一小圈。因此评估池会按**方向扇区 × 距离环**取样（`_sector_balanced_pool` / `_interleave_sectors`），下限 30 个、按评估批量向上取整。注意只按扇区平衡**不够**：每个扇区取到的仍是"该方向最近的几个"，而城市周边最近的点天然围成一圈——实测按扇区平衡后 150km 搜出 1246 个候选，评价完的 28 个仍全在 11km 内。距离环必须一起轮转。
+- **散布与成本的取舍（实测记录）**：把评估池放大到 40、按距离环铺满 150km，在成都实测要 **3 倍**路径调用（10 → 30 次）却只返回 8 个钓位（因为远环大量超 2 小时），属于"花三倍代价拿更少结果"，已放弃。当前策略保持池深 30 与旧版一致，仅改变**取谁**：默认 50km 首屏的散布从 1.1–5.5km 提升到 1.1–10.8km，评估次数不变。150km 档因为要够到远处会用到 30 次上限。
+- **分页口径**：先对**全部**合格候选按间距规则交错排序（`_interleave_by_spacing`），再切片 `[offset:offset+limit]`。交错只决定"谁进这一页"，页内仍按 `total_score` 降序，卡片顺序仍承诺"最好的在前"。若先切页再散布，页大小之外没有可选余地，且第 2 页可能重复第 1 页的钓位。每次请求重新召回、评估并排序，不做缓存；因此两次请求之间若路况/天气变化，批次内容可能变化，仅保证单次响应内无重复。
+- **散布字段**：`meta.selection_strategy`（当前固定 `sector_greedy_spacing`）、`meta.min_separation_m`（这一页**实际达成**的最小两两间距，不是目标值）、`meta.separation_relaxed`（目标间距达不到、已逐步放宽）。目标间距随搜索半径缩放，夹在 3–25km。
 - `truncated_by_limit = eligible - returned` 涵盖 `offset` 前被跳过的合格候选与窗口外剩余候选；`eligible = returned + truncated_by_limit` 不变式继续成立。`forbidden=0` 仅为未命中规则的事实字段，不代表“均可钓”。
 - **有界并发与限速**：召回分片与路径规划共享并发信号量（`FISHAGENT_AMAP_CONCURRENCY`，默认 6）与请求起间隔（`FISHAGENT_AMAP_QPS`，默认 2）；Mock 不受影响。**QPS=2 是高德账号的硬限制**，实测调高会返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`，因此提高并发数对总耗时无效（实测 6/12/20 并发均为 14s 量级）。
 - **去程/回程只算一次**：真实 `AMapGeoProvider.estimate_drive_seconds` 忽略 `direction` 参数，去程与回程是对同一 origin/destination 的完全相同请求。服务层因此只发一次（`direction_affects_result=False`），往返时间按 2 倍展示。Mock 区分去/回程（`_TRAVEL_FACTORS`），故保留两次调用。
 - **结果缓存**：`GET /api/spots/recommend` 按 (坐标四舍五入 3 位、radius_km、limit、species、offset) 缓存 180s（`_CACHE_TTL_SECONDS`），LRU 上限 256 条。车程是基线估算，几分钟内变化在噪声范围内。实测冷启动 14.8s → 8.1s，热命中 <20ms。
-- `filtered` 口径（固定顺序）：`total_candidates` = 召回并去重后的候选总数（进入过滤前的基数）；先禁钓过滤，再对评估窗口做往返过滤，最后排序截断。保持不变式：
-  `total_candidates = forbidden + evaluated + unevaluated`；
+- `filtered` 口径（固定顺序）：`total_candidates` = 召回总数（进入任何过滤前的基数）；先按内圈半径排除，再禁钓过滤，再对评估窗口做往返过滤，最后排序截断。保持不变式：
+  `total_candidates = within_min_radius + forbidden + evaluated + unevaluated`；
   `evaluated = unavailable + over_two_hours + eligible`；
   `eligible = returned + truncated_by_limit`；
   `returned = len(spots)`。
+  `unevaluated` 含被省略的去重候选：它们被召回了但没有任何车程估算，正是"未评估"的含义。
   同时命中禁钓与超时的候选只计入 `forbidden`。`unevaluated` 为未进入评估窗口的候选；Mock 全量评估，因此 `unevaluated=0`，上述不变式退化为 `total_candidates = forbidden + over_two_hours + eligible`。
 
 ### 4.4 `POST /api/agent/chat`
@@ -325,6 +348,44 @@ fixtures/                         # 小产：演示场景
 ### 4.5 `GET /api/demo/config`（可选，用于前端）
 
 返回 Mock 模式、默认演示坐标（杭州 30.2741/120.1551）、免责与 AI 标识文案，字段由小钱/小厚约定即可。
+
+### 4.5b `GET /api/geo/search`、`GET /api/geo/nearby`（位置选择器）
+
+Step 1 的定位入口。经纬度对普通用户没有意义——钓鱼的人记得住「青龙湖」，记不住 30.6570——所以主路径改成「搜地名」和「看看附近」，坐标输入收进「高级」折叠区。
+
+**`GET /api/geo/search?q=<关键词>&limit=8`**
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `q` | string | 是 | 1–60 字符，允许中文 |
+| `limit` | int | 否 | 默认 8，范围 1–20 |
+
+**`GET /api/geo/nearby?lat=&lon=&radius_km=30&limit=8`**：`lat`/`lon` 必填（WGS84），`radius_km` 范围 1–50。
+
+两者共用响应结构 `PlaceSearchResponse`：
+
+```json
+{
+  "results": [
+    {"name": "三岔湖景区", "address": "望湖北街178号", "lat": 30.2794, "lon": 104.2669, "kind": "湖泊", "distance_m": null}
+  ],
+  "query": "三岔湖",
+  "resolved": true
+}
+```
+
+约束：
+
+- **坐标一律 WGS84**。高德只有 GCJ-02，转换只在 provider 边界发生（`core/coords.py`），上层看到的只有一种基准；泄漏会让用户静默偏出几百米。
+- **`resolved` 必须区分「查过了没有」和「这个源不会查」**。`resolved=false` 表示 provider 不支持该方法或上游失败，前端据此引导到手动坐标，而不是告诉用户「没有这个地方」——把服务故障说成用户输入错误是我们在别处已经修过一次的同类错误。
+- **失败降级为 200 + 空列表**，不返回 5xx：手动坐标表单仍然可用，选择器挂掉不该让整页失败。
+- **搜索结果水域优先**：`/v3/place/text` 返回的是**大类前缀**（`110200` 风景名胜、`110203` 水库、`110000` 景区），不是 `around` 搜索的叶子码（`190204` 河流、`190205` 湖泊）。写成叶子码匹配时线上**一条都匹配不上**，排序会静默失效。判定用前缀 + 名称水体词，并排除桥/码头/收费站/闸/堤这类「通向水域但不是钓点」的地名。
+- `kind`：水域结果填具体类型（湖泊/河流/水库/野塘），文字搜索结果若判定为水域也填类型，否则填 `place`。
+- 结果经过名称非空与坐标范围校验；排序稳定，同组内保留高德的原始相关度顺序。
+- **前端定位需要 HTTPS**（2026-10-29 实故障）：`navigator.geolocation` 只在安全上下文可用，而**非安全上下文下浏览器把「根本不提供定位」也报成 `PERMISSION_DENIED`（code 1）**，与用户真的点了拒绝完全无法区分。前端必须**先检查 `window.isSecureContext`**，为 false 时直接说明「http 地址不支持定位，不是权限问题」，不得沿用「权限被拒绝」的文案——否则用户会去找一个永远改不好的开关。
+- **部署（2026-10-30 最终）**：8018 日常走**明文 HTTP**，用仓库根的 `serve.bat` 启动，开机自启同此。因此在手机访问 `http://<LAN-IP>:8018` 时**定位按钮不可用**（只有地名搜索、附近水域、手动坐标可用），Service Worker 也不注册——这是权衡后接受的代价，见 `docs/cr03-lan-https-runbook.md` §5。需要定位与 PWA 时改用 `serve-https.bat`（mkcert IP SAN 证书，SAN 覆盖 `localhost`/`127.0.0.1`/`192.168.31.68`，有效期至 2029-01-24；证书按 IP 签发，主机 IP 变了要重签）。
+- 界面对上述限制必须**如实说明**：明文时提示「改用 https / 地名搜索」，不得暗示是权限问题。
+- 定位成功时优先级最高，直接覆盖此前的搜索/点选结果，并收起选择器列表。
 
 ### 4.6 `POST /api/spots/species`（CR-04，推荐鱼种）
 
@@ -413,6 +474,38 @@ fixtures/                         # 小产：演示场景
 - **如实报告**：视觉调用本身失败（超时 / 上游报错 / 空回答 / 回答无法解析）返回 503 `VISION_UNAVAILABLE`，文案按失败原因区分，且明确不归咎于照片；`identified=false`（200）只表示「模型看过了，照片里没有鱼」。两者**不可合并**。415 的三种来源（空文件 / 不是图片 / 文件损坏）各有独立 `code` 与文案，前端必须透传，不得统一改写成「不支持的图片格式」。
 - **配额**：真实模式每次视觉调用在 `api/identify.py` 内 `ledger.consume("llm")` 扣 1 单位；耗尽抛 `UpstreamQuotaExceeded` 由已有 handler 转 429 + `Retry-After`。与 4.6 不同：本端点无部分结果可降级，故返回 429 而非 200。
 
+### 4.8 静态资源缓存与版本提示（CR-05）
+
+目标：用户不用手动清缓存，也不必猜自己是不是旧版；有新版本时看得见、且由自己决定何时刷新。
+
+**缓存策略**
+
+| 资源 | 响应头 | 理由 |
+|---|---|---|
+| `index.html`、`app.js`、`styles.css`、`sw.js`、`manifest.webmanifest` | `Cache-Control: no-cache` | 允许存但每次必须回源校验。ETag 是内容哈希，命中即 `304` 无响应体，局域网内代价可忽略 |
+| `icons/*` | `Cache-Control: public, max-age=86400` | 不含任何行为，SW 里本就是 cache-first，没必要每次校验 |
+| `/health` | `Cache-Control: no-store` | 它本身就是"我是不是旧版"的判据，缓存答案等于永远不自知 |
+
+**为什么必须是 `no-cache` 而不是 `no-store`**：`no-store` 会连离线回退一起丢掉。`no-cache` 只要求校验，离线时仍能取回缓存副本。
+
+**为什么之前是坏的**：静态响应只带 `ETag` + `Last-Modified`，没有 `Cache-Control`，浏览器因此按启发式新鲜度自行决定（通行做法是文件年龄的 10%）。一个一天前的 `app.js` 可能几小时都不回源，**连刷新都不解决**——刷新同样被缓存答复。
+
+**版本号**
+
+- 服务端启动时算出 `build`（见 4.1），并在响应 `index.html` 时把同一值注入 `<meta name="fishagent-build">`。
+- 构建号由内容算出，**不手工维护**。`__version__` 保持为 API 版本，不承担构建标识的职责——要求每次部署手动改常量，迟早会忘。
+- 构建号按文件签名（mtime + size）失效重算：静态目录是每次请求读盘的，只改 `web/` 而不重启服务时，若构建号被缓存住，就会一边发新文件一边报旧版本，提示条永远不触发。
+
+**前端行为**
+
+- 页面每 60 秒、以及从后台切回时，拉一次 `/health`，把 `build` 与自身 meta 比较。
+- 不一致时显示可关闭的提示条「FishAgent 有新版本可用 / 立即更新」。
+- **刷新只由用户点击触发，绝不自动 reload**：表单输入、已选鱼获照片、对话记录都只在内存中（照片明确不落盘），静默刷新会直接吞掉这些。
+- 「稍后再说」按 build 记住，同一个新版本不再弹；用户下次刷新后自然拿到新版。
+- meta 里仍是占位符 `__FISHAGENT_BUILD__`（说明这份 HTML 不是本应用发的，例如 `file://` 或陈旧代理）时，视为未知版本并完全关闭检测，否则每次轮询都会误报有更新。
+
+**与 Service Worker 的关系**：SW 侧仍是 shell 资源 network-first + `skipWaiting` + `clients.claim`。但**手机上目前不注册 SW**（明文 http 非安全上下文，见 4.5b），所以上述 HTTP 缓存策略是手机端唯一的实际保障，不能指望 SW。
+
 ## 5. Mock 数据要求
 
 - **天气 Mock**：以 `(lat, lon, date, at)` 为种子确定性生成。五档通过查询参数 `scenario` 触发：`excellent`→极佳、`good`→良好、`fair`→一般、`poor`→偏差、`no_go`→劝退；未提供时按种子生成默认场景。必须包含气压 24h/3h/6h 变化、气温变温、风速、降水、云量、日出日落。`no_go` 场景至少包含暴雨/雷雨或 ≥5 级风，确保 `band=劝退`。
@@ -480,3 +573,11 @@ cd backend
 | v2.3 | 2026-10-29 | `bing` Provider 只搜地名 + 退化检测；新增 `source="typical"`（按水域类型的参考值，与引用来源在文案/样式上区分；`degraded` 与 `NullSpeciesProvider` 不给） | 「{地名} 钓鱼」使 cn.bing 对每条查询都返回首字字典词条，鱼种推荐召回率为 0；360/百度/DDG/高德 POI/LLM 直接作答均实测不可用 |
 | v2.4 | 2026-10-29 | 抓页阶段加截止时间；前端鱼种超时 4500→7500ms | 手机上「推荐鱼种」报「请求超时」，后端日志却是 200 OK：一个慢页面使抓页阶段超出预算、整批被外层 `wait_for` 取消，且前端 4.5s 闹钟只比后端 4.0s 预算晚 0.5s，移动网络往返就足以先掐断 |
 | v2.5 | 2026-10-29 | `water_depth` 由气温基准层 + F1/F2/F3/F4/F5/F7 修正推导，输出「先钓 X，无口再试 Y（原因）」；`suitable_species` 与之共用 `_depth_plan`；劝退档不给策略且前端隐藏鱼种行 | 原实现只看气温三分支，5–32℃ 之间每条请求都返回同一句话，卡片没有信息量；且雷雨劝退时仍给出「钓浅」并被标注成「气压缓降鱼活跃」，与预警自相矛盾；水深改用多因子后还会出现「钓 4–5m 深水」却推荐暖水鱼的组合 |
+| v2.6 | 2026-10-29 | 新增 `/api/geo/search` 与 `/api/geo/nearby`；Step 1 改为地名搜索 + 附近水域，坐标输入折叠进「高级」 | Step 1 唯一的手动入口是一对经纬度输入框，普通用户记不住也读不懂；钓鱼的人知道「三岔湖」但不知道 30.2794/104.2669 |
+| v2.6b | 2026-10-29 | 定位前检查 `isSecureContext`；非 https 时明确说明「不是权限问题」；定位成功后收起选择器列表 | 真机用 http 访问局域网 IP 时，浏览器把「不提供定位」报成 `PERMISSION_DENIED`，前端统一提示「定位权限被拒绝」，把地址协议问题误导成权限问题 |
+| v2.7 | 2026-10-30 | ~~8018 直接改为 HTTPS~~（已于 v2.7c 回退） | 明文 8018 在真机上永久失去定位与 Service Worker；独立 8020 实例多一个要维护的进程 |
+| v2.7b | 2026-10-30 | 新增 `scripts/start-fishagent.vbs` 并放入启动文件夹（无窗口、重复启动自动跳过、日志落 `D:\FishAgent\logs`） | 主机重启后手工起服务会退回明文访问或干脆没起，定位与 PWA 又失效；`.bat` 放启动项会常驻命令行窗口 |
+| v2.7c | 2026-10-30 | **回退 v2.7**：8018 与开机自启改回明文 HTTP（新增 `serve.bat`，VBS 用 `Const BAT_NAME` 切换）。接受手机端无定位、无 SW；`serve-https.bat` 保留备用。接口不变 | 真机装 mkcert CA 的门槛、以及证书按 IP 签发导致换地址就要重签，比换回来的定位与 PWA 更麻烦；页面已能如实说明限制，不再把协议问题说成权限问题 |
+| v2.8 | 2026-10-30 | shell 资源加 `Cache-Control: no-cache`；`/health` 增加内容哈希 `build` 并注入 `index.html`；页面轮询发现新版后显示提示条，由用户点「立即更新」 | 静态响应原本不带 `Cache-Control`，浏览器按启发式新鲜度自行缓存，旧 `app.js` 可能几小时不回源，**刷新也拿不到新版**；手机端没有 SW 兜底，只能靠 HTTP 缓存策略 |
+| v2.9 | 2026-10-30 | 钓位推荐改为「扇区 × 距离环」取样评估池 + 间距交错分页 + 同名水体去重；`meta` 新增 `selection_strategy` / `min_separation_m` / `separation_relaxed` | 实测成都 80km 搜出 448 个候选，返回的 5 个全在 7.7km 内、鱼情分全是 81（排序实际等价于「最近的几个」）；另有一页 5 张卡片里 3 张同名「府河」，用户无从区分 |
+| v2.10 | 2026-10-30 | 搜索半径改为**环带**：新增 `min_radius_km`（默认 0，兼容旧调用），前端下拉改为 0–10 / 10–50 / 50–100 / 100–150 四档；`filtered` 新增 `within_min_radius`，`meta` 新增 `min_radius_km` | 用户要看「远一点的地方」，而单一半径只能收窄外圈，返回的仍是那几个最近的；环带才能真正把近处的排除掉 |

@@ -65,7 +65,10 @@
     speciesPending: {},
     speciesError: {},
     identifyBusy: false,
-    identifyRun: null
+    identifyRun: null,
+    updatePollTimer: null,
+    updateDismissedBuild: null,
+    updateSeenBuild: null
   };
 
   function $(id) {
@@ -856,6 +859,64 @@
       throw new Error('服务返回了无法解析的响应。');
     }
     return data;
+  }
+
+  // How often an open page asks the server which build it is serving.
+  // A minute is frequent enough that a deploy lands while the user is still
+  // looking at the page, and cheap enough to ignore: the answer is a tiny
+  // no-store JSON.
+  var UPDATE_POLL_MS = 60000;
+
+  function currentBuild() {
+    var meta = document.querySelector('meta[name="fishagent-build"]');
+    var value = meta ? meta.getAttribute('content') : '';
+    // The server replaces the placeholder; if it did not, this page was served
+    // by something other than our app (a stale proxy, a file:// copy). Treat
+    // that as "unknown" rather than as a build id, or every poll would report
+    // an update.
+    if (!value || value === '__FISHAGENT_BUILD__') return '';
+    return value;
+  }
+
+  function showUpdateBanner(serverBuild) {
+    var banner = $('update-banner');
+    if (!banner) return;
+    state.updateSeenBuild = serverBuild;
+    // Stay hidden if the user already said "later" for this exact build; a
+    // banner that keeps coming back after being dismissed is just noise.
+    if (state.updateDismissedBuild === serverBuild) {
+      banner.hidden = true;
+      return;
+    }
+    banner.hidden = false;
+  }
+
+  function checkForUpdate() {
+    var mine = currentBuild();
+    if (!mine) return Promise.resolve();
+    return requestJSON('/health', { cache: 'no-store' }, { timeoutMs: GEO_TIMEOUT_MS })
+      .then(function (health) {
+        var server = health && health.build;
+        if (server && server !== mine) showUpdateBanner(server);
+        return null;
+      })
+      .catch(function () {
+        // Offline or the server is down: say nothing. A failed poll is not
+        // evidence of an update, and the offline banner already covers this.
+        return null;
+      });
+  }
+
+  function startUpdateWatch() {
+    if (!currentBuild()) return;
+    checkForUpdate();
+    if (state.updatePollTimer) clearInterval(state.updatePollTimer);
+    state.updatePollTimer = setInterval(checkForUpdate, UPDATE_POLL_MS);
+    // A phone that was backgrounded comes back with a stale page and no timer
+    // having fired in between; re-check on return.
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') checkForUpdate();
+    });
   }
 
   async function checkHealth() {
@@ -2394,6 +2455,17 @@
     });
     $('nearby-btn').addEventListener('click', handleNearby);
     $('geo-btn').addEventListener('click', handleGeolocation);
+    $('update-reload-btn').addEventListener('click', function () {
+      // cache: 'reload' skips the browser cache for this load. Without it the
+      // reload can be answered from the very cache that made the page stale;
+      // the server still revalidates by ETag afterwards, so this costs one
+      // full fetch and then settles back to 304s.
+      window.location.reload();
+    });
+    $('update-dismiss-btn').addEventListener('click', function () {
+      state.updateDismissedBuild = state.updateSeenBuild;
+      $('update-banner').hidden = true;
+    });
     $('radius-select').addEventListener('change', handleRadiusChange);
     $('spots-refresh').addEventListener('click', handleSpotsRefresh);
     $('chat-form').addEventListener('submit', function (event) {
@@ -2411,7 +2483,9 @@
   function mockRequest(path, options) {
     var url = new URL(path, window.location.href);
     if (url.pathname === '/health') {
-      return Promise.resolve({ status: 'ok', version: '0.1.0', mock_mode: true });
+      // No build id in mock mode: this page is not talking to a server that
+      // could have a newer one, so the update watch stays off.
+      return Promise.resolve({ status: 'ok', version: '0.1.0', build: '', mock_mode: true });
     }
     if (url.pathname === '/api/fish-activity') {
       return Promise.resolve(makeMockFishActivity());
@@ -2825,6 +2899,7 @@
       setStatus('当前为前端 Mock 演示（?mock=1），数据仅用于界面自查。', 'info', true);
     } else {
       checkHealth();
+      startUpdateWatch();
     }
     refreshAll();
     updateChatControls();

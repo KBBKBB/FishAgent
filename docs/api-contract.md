@@ -21,6 +21,7 @@
 > v2.7（2026-10-30，已被 v2.7c 回退）：8018 曾改为 HTTPS 并新增 `serve-https.bat`。
 > v2.7b（2026-10-30）：新增 `scripts/start-fishagent.vbs` 并装入 Windows 启动文件夹，登录后自动以隐藏方式拉起服务；仓库搬家需同步更新 `D:\FishAgent\repo-root.txt`。接口不变。
 > v2.7c（2026-10-30）：8018 与开机自启改回**明文 HTTP**（`serve.bat`）。手机端因此没有定位与 Service Worker，页面如实提示；`serve-https.bat` 保留备用。接口不变。
+> v2.8（2026-10-30）：新增 4.8 静态资源缓存与版本提示。shell 资源改 `no-cache`，`/health` 增加内容哈希 `build` 字段并注入 `index.html`，页面轮询发现新版本后提示、由用户自己点刷新。`/health` 响应新增 `build`（向后兼容的增量字段）。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
 ## 1. 目录与所有权
@@ -101,8 +102,12 @@ fixtures/                         # 小产：演示场景
 ### 4.1 `GET /health`
 
 ```json
-{ "status": "ok", "version": "0.1.0", "mock_mode": true }
+{ "status": "ok", "version": "0.1.0", "build": "14c85f31a06a", "mock_mode": true }
 ```
+
+- `version`：API 版本，人工维护，不随部署变化。
+- `build`：**当前服务端 H5 资源的构建号**——对 `index.html` / `app.js` / `styles.css` / `sw.js` / `manifest.webmanifest` 内容做的 sha256 前 12 位（CRLF/LF 归一化，避免换行风格差异被当成新版本）。前端据此判断自己跑的是不是最新版。
+- 响应头固定 `Cache-Control: no-store`：这个端点正是前端用来判断"我是不是旧版"的，缓存住的答案会让它永远轮询到那个旧答案。
 
 ### 4.2 `GET /api/fish-activity`
 
@@ -456,6 +461,38 @@ Step 1 的定位入口。经纬度对普通用户没有意义——钓鱼的人�
 - **如实报告**：视觉调用本身失败（超时 / 上游报错 / 空回答 / 回答无法解析）返回 503 `VISION_UNAVAILABLE`，文案按失败原因区分，且明确不归咎于照片；`identified=false`（200）只表示「模型看过了，照片里没有鱼」。两者**不可合并**。415 的三种来源（空文件 / 不是图片 / 文件损坏）各有独立 `code` 与文案，前端必须透传，不得统一改写成「不支持的图片格式」。
 - **配额**：真实模式每次视觉调用在 `api/identify.py` 内 `ledger.consume("llm")` 扣 1 单位；耗尽抛 `UpstreamQuotaExceeded` 由已有 handler 转 429 + `Retry-After`。与 4.6 不同：本端点无部分结果可降级，故返回 429 而非 200。
 
+### 4.8 静态资源缓存与版本提示（CR-05）
+
+目标：用户不用手动清缓存，也不必猜自己是不是旧版；有新版本时看得见、且由自己决定何时刷新。
+
+**缓存策略**
+
+| 资源 | 响应头 | 理由 |
+|---|---|---|
+| `index.html`、`app.js`、`styles.css`、`sw.js`、`manifest.webmanifest` | `Cache-Control: no-cache` | 允许存但每次必须回源校验。ETag 是内容哈希，命中即 `304` 无响应体，局域网内代价可忽略 |
+| `icons/*` | `Cache-Control: public, max-age=86400` | 不含任何行为，SW 里本就是 cache-first，没必要每次校验 |
+| `/health` | `Cache-Control: no-store` | 它本身就是"我是不是旧版"的判据，缓存答案等于永远不自知 |
+
+**为什么必须是 `no-cache` 而不是 `no-store`**：`no-store` 会连离线回退一起丢掉。`no-cache` 只要求校验，离线时仍能取回缓存副本。
+
+**为什么之前是坏的**：静态响应只带 `ETag` + `Last-Modified`，没有 `Cache-Control`，浏览器因此按启发式新鲜度自行决定（通行做法是文件年龄的 10%）。一个一天前的 `app.js` 可能几小时都不回源，**连刷新都不解决**——刷新同样被缓存答复。
+
+**版本号**
+
+- 服务端启动时算出 `build`（见 4.1），并在响应 `index.html` 时把同一值注入 `<meta name="fishagent-build">`。
+- 构建号由内容算出，**不手工维护**。`__version__` 保持为 API 版本，不承担构建标识的职责——要求每次部署手动改常量，迟早会忘。
+- 构建号按文件签名（mtime + size）失效重算：静态目录是每次请求读盘的，只改 `web/` 而不重启服务时，若构建号被缓存住，就会一边发新文件一边报旧版本，提示条永远不触发。
+
+**前端行为**
+
+- 页面每 60 秒、以及从后台切回时，拉一次 `/health`，把 `build` 与自身 meta 比较。
+- 不一致时显示可关闭的提示条「FishAgent 有新版本可用 / 立即更新」。
+- **刷新只由用户点击触发，绝不自动 reload**：表单输入、已选鱼获照片、对话记录都只在内存中（照片明确不落盘），静默刷新会直接吞掉这些。
+- 「稍后再说」按 build 记住，同一个新版本不再弹；用户下次刷新后自然拿到新版。
+- meta 里仍是占位符 `__FISHAGENT_BUILD__`（说明这份 HTML 不是本应用发的，例如 `file://` 或陈旧代理）时，视为未知版本并完全关闭检测，否则每次轮询都会误报有更新。
+
+**与 Service Worker 的关系**：SW 侧仍是 shell 资源 network-first + `skipWaiting` + `clients.claim`。但**手机上目前不注册 SW**（明文 http 非安全上下文，见 4.5b），所以上述 HTTP 缓存策略是手机端唯一的实际保障，不能指望 SW。
+
 ## 5. Mock 数据要求
 
 - **天气 Mock**：以 `(lat, lon, date, at)` 为种子确定性生成。五档通过查询参数 `scenario` 触发：`excellent`→极佳、`good`→良好、`fair`→一般、`poor`→偏差、`no_go`→劝退；未提供时按种子生成默认场景。必须包含气压 24h/3h/6h 变化、气温变温、风速、降水、云量、日出日落。`no_go` 场景至少包含暴雨/雷雨或 ≥5 级风，确保 `band=劝退`。
@@ -528,3 +565,4 @@ cd backend
 | v2.7 | 2026-10-30 | ~~8018 直接改为 HTTPS~~（已于 v2.7c 回退） | 明文 8018 在真机上永久失去定位与 Service Worker；独立 8020 实例多一个要维护的进程 |
 | v2.7b | 2026-10-30 | 新增 `scripts/start-fishagent.vbs` 并放入启动文件夹（无窗口、重复启动自动跳过、日志落 `D:\FishAgent\logs`） | 主机重启后手工起服务会退回明文访问或干脆没起，定位与 PWA 又失效；`.bat` 放启动项会常驻命令行窗口 |
 | v2.7c | 2026-10-30 | **回退 v2.7**：8018 与开机自启改回明文 HTTP（新增 `serve.bat`，VBS 用 `Const BAT_NAME` 切换）。接受手机端无定位、无 SW；`serve-https.bat` 保留备用。接口不变 | 真机装 mkcert CA 的门槛、以及证书按 IP 签发导致换地址就要重签，比换回来的定位与 PWA 更麻烦；页面已能如实说明限制，不再把协议问题说成权限问题 |
+| v2.8 | 2026-10-30 | shell 资源加 `Cache-Control: no-cache`；`/health` 增加内容哈希 `build` 并注入 `index.html`；页面轮询发现新版后显示提示条，由用户点「立即更新」 | 静态响应原本不带 `Cache-Control`，浏览器按启发式新鲜度自行缓存，旧 `app.js` 可能几小时不回源，**刷新也拿不到新版**；手机端没有 SW 兜底，只能靠 HTTP 缓存策略 |

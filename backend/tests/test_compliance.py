@@ -164,3 +164,37 @@ def test_geolocation_hides_stale_picker_results():
     end = app_js.index("function hidePlaceLists", start)
     body = app_js[start:end]
     assert "hidePlaceLists()" in body
+
+
+#
+# 版本提示（2026-10-30）：用户要在界面上知道有新版本，并在自己想的时候升级。
+#
+# 两条约束来自这个页面自己的性质，不是偏好：
+#   1. 不能自动刷新——表单、已选鱼获照片、对话都只在内存里（照片明确不落盘），
+#      静默 reload 会把这些直接吞掉。
+#   2. 关闭后再弹就只是噪音：按 build 记住「稍后再说」。
+
+
+def test_update_is_offered_not_forced():
+    """发现新版本只能提示，刷新必须由用户点。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function showUpdateBanner")
+    end = app_js.index("function checkForUpdate", start)
+    body = app_js[start:end]
+    assert "reload" not in body, "提示逻辑不得直接刷新页面"
+    assert "hidden = false" in body
+
+
+def test_update_dismissal_is_per_build():
+    """「稍后再说」要按 build 记住，否则下一轮轮询又把提示弹回来。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "updateDismissedBuild === serverBuild" in app_js
+
+
+def test_update_watch_ignores_uninjected_pages():
+    """占位符没被替换时不能当成 build id，否则每次轮询都报「有新版本」。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "__FISHAGENT_BUILD__" in app_js
+    index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'name="fishagent-build"' in index_html
+

@@ -251,6 +251,9 @@ class SpeciesRecommendationResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+    # Content hash of the served H5 shell; lets an open page notice a deploy.
+    # Empty only if the web directory is missing.
+    build: str = ""
     mock_mode: bool
 
 

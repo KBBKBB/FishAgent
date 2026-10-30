@@ -162,6 +162,28 @@ icacls "D:\FishAgent\certs" /inheritance:r /grant:r "koubinbin:(OI)(CI)(F)" "*S-
 
 ## 5. 8020 HTTPS 启动
 
+> **2026-10-30 更新：8018 已直接改为 HTTPS，8020 不再是必需品。**
+>
+> 原方案用 8020 作独立 HTTPS 实例、8018 保持明文，是为了「不动 S1」。但实践下来
+> 明文 8018 在真机上**永久失去定位**：`navigator.geolocation` 只在安全上下文存在，
+> 而 http 局域网地址下浏览器把「不提供定位」报成 `PERMISSION_DENIED`，看起来像权限
+> 问题，实际是协议问题（详见 `api-contract.md` 4.5b 与 v2.6b）。
+>
+> 现在 8018 本身加载同一份证书（SAN 覆盖 `localhost` / `127.0.0.1` / `192.168.31.68`），
+> 用仓库根的 `serve-https.bat` 启动：
+>
+> ```
+> serve-https.bat          REM 默认 8018
+> serve-https.bat 8020     REM 换端口
+> ```
+>
+> 脚本会先校验解释器与证书文件是否存在再启动，缺证书时报错指向本 runbook。
+> **明文 `http://<IP>:8018` 已不可用**（同一端口只提供 TLS）；同机调试请用
+> `https://127.0.0.1:8018` 或 `https://localhost:8018`。
+>
+> 8020 仍可用于「Mock 模式 + 不消耗上游」的真机安装验证，按 §5.1 单独启动即可；
+> 两者不能同时占用同一端口。以下 §5.1 原始命令保留，用于 8020。
+
 ### 5.1 启动参数
 
 ```powershell

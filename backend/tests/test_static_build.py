@@ -112,3 +112,76 @@ def test_holder_is_stable_when_nothing_changes(tmp_path):
 @pytest.mark.parametrize("path", ["/app.js", "/styles.css", "/sw.js"])
 def test_served_shell_assets_exist(client, path):
     assert client.get(path).status_code == 200
+
+
+# --- the backend half of the build id ---------------------------------------
+#
+# The page polls /health to notice a deploy. That only helps if the id moves
+# when the server actually changes. web/ is read from disk per request, so an
+# edit is live immediately -- but Python is not: a saved .py does nothing until
+# the process restarts. The id therefore has to cover both halves on their own
+# clocks, or a backend change would go unnoticed by every open phone.
+
+
+def test_backend_fingerprint_tracks_file_content(tmp_path):
+    pkg = tmp_path / "pkg"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (pkg / "sub" / "b.py").write_text("y = 2\n", encoding="utf-8")
+    first = static_build.compute_backend_fingerprint(pkg)
+
+    # Line endings are normalised, exactly as for the shell files: a checkout
+    # must not look like a release.
+    (pkg / "a.py").write_bytes(b"x = 1\r\n")
+    assert static_build.compute_backend_fingerprint(pkg) == first
+
+    (pkg / "sub" / "b.py").write_text("y = 3\n", encoding="utf-8")
+    assert static_build.compute_backend_fingerprint(pkg) != first
+
+
+def test_backend_fingerprint_ignores_non_python_files(tmp_path):
+    """Only .py is hashed. __pycache__ churns on every import and would make
+    the id change for reasons no user could act on."""
+    pkg = tmp_path / "pkg"
+    (pkg / "__pycache__").mkdir(parents=True)
+    (pkg / "a.py").write_text("x = 1\n", encoding="utf-8")
+    first = static_build.compute_backend_fingerprint(pkg)
+
+    (pkg / "__pycache__" / "a.cpython-312.pyc").write_bytes(b"\x00binary")
+    (pkg / "notes.txt").write_text("scratch", encoding="utf-8")
+    assert static_build.compute_backend_fingerprint(pkg) == first
+
+
+def test_build_id_covers_both_halves(tmp_path):
+    web = tmp_path / "web"
+    web.mkdir()
+    for name in static_build.SHELL_FILES:
+        (web / name).write_text(f"// {name}\n", encoding="utf-8")
+
+    baseline = static_build.compute_build_id(web)
+    with_backend = static_build.compute_build_id(web, "abc123")
+    assert with_backend != baseline, "后端指纹必须参与构建 ID"
+    assert static_build.compute_build_id(web, "def456") != with_backend
+
+    # And the shell half still works on its own.
+    (web / "app.js").write_text("// changed\n", encoding="utf-8")
+    assert static_build.compute_build_id(web, "abc123") != with_backend
+
+
+def test_backend_fingerprint_is_frozen_at_startup(tmp_path):
+    """A saved .py while the server runs must NOT change the id: the running
+    process still executes the old code, so telling clients to reload would
+    offer an update that a reload cannot deliver."""
+    web = tmp_path / "web"
+    web.mkdir()
+    for name in static_build.SHELL_FILES:
+        (web / name).write_text(f"// {name}\n", encoding="utf-8")
+
+    holder = static_build.BuildIdHolder(web, backend_fingerprint="frozen")
+    before = holder.get()
+    # Simulate the file on disk changing underneath a running process.
+    (web / "app.js").write_text("// touched\n", encoding="utf-8")
+    assert holder.get() != before, "web/ 改动应立即生效（按请求读盘）"
+
+    # The backend half is not re-read, so its contribution stays put.
+    assert holder._backend_fingerprint == "frozen"

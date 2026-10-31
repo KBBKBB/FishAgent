@@ -21,6 +21,13 @@ Two pieces fix that:
 The id is computed, never hand-maintained. ``__version__`` stays the API
 version -- it is a human decision, and asking someone to remember to bump a
 constant on every deploy is how it ends up stale.
+
+The id covers two halves that move on different clocks. ``web/`` is read from
+disk per request, so editing a shell file is live immediately. Python is not:
+a saved module does nothing until the process restarts. So the shell half is
+re-hashed whenever those files change, while the backend half is fingerprinted
+once at startup and frozen. An id that moved when a ``.py`` was merely saved
+would announce a release that a reload cannot deliver.
 """
 
 from __future__ import annotations
@@ -47,13 +54,24 @@ BUILD_META_NAME = "fishagent-build"
 BUILD_PLACEHOLDER = "__FISHAGENT_BUILD__"
 
 
-def compute_build_id(web_dir: Path) -> str:
+def compute_build_id(web_dir: Path, backend_fingerprint: str = "") -> str:
     """Hash the shell files into a short, stable id.
 
     Content, not mtime: a git checkout or a restore can move mtimes without
     changing a byte, and that must not look like a new release.
+
+    ``backend_fingerprint`` covers the Python side. It is passed in rather than
+    computed here because the two halves change on different clocks: ``web/`` is
+    read from disk per request, so editing a file is live immediately, while
+    Python is only live after a restart. A build id that moved as soon as a
+    ``.py`` was saved would announce an update that changes nothing until the
+    process is restarted -- see ``compute_backend_fingerprint``.
     """
     digest = hashlib.sha256()
+    if backend_fingerprint:
+        digest.update(b"backend\0")
+        digest.update(backend_fingerprint.encode("ascii"))
+        digest.update(b"\0")
     for name in SHELL_FILES:
         path = web_dir / name
         try:
@@ -70,6 +88,31 @@ def compute_build_id(web_dir: Path) -> str:
         digest.update(data)
         digest.update(b"\0")
     return digest.hexdigest()[:12]
+
+
+def compute_backend_fingerprint(package_dir: Path) -> str:
+    """Hash the Python package once, to identify the code this process runs.
+
+    Called at startup and never again, which is the point. The interpreter has
+    already loaded these modules; editing a file on disk cannot change what is
+    executing. Freezing the value here means the build id moves exactly when the
+    running code does -- on restart -- instead of the moment someone saves a
+    file and gets a "new version" banner that a reload cannot satisfy.
+
+    Content only: mtimes move on checkout and restore without changing a byte.
+    """
+    digest = hashlib.sha256()
+    files = sorted(package_dir.rglob("*.py"))
+    for path in files:
+        try:
+            data = path.read_bytes().replace(b"\r\n", b"\n")
+        except OSError:
+            data = b""
+        digest.update(path.relative_to(package_dir).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(data)
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _is_shell_asset(pathname: str) -> bool:
@@ -164,8 +207,10 @@ class BuildIdHolder:
     while /health runs on the event loop.
     """
 
-    def __init__(self, web_dir: Path) -> None:
+    def __init__(self, web_dir: Path, backend_fingerprint: str = "") -> None:
         self._web_dir = web_dir
+        # Fixed for the life of the process; see compute_backend_fingerprint.
+        self._backend_fingerprint = backend_fingerprint
         self._lock = threading.Lock()
         self._value: str | None = None
         self._signature: tuple[tuple[str, int, int], ...] | None = None
@@ -189,6 +234,8 @@ class BuildIdHolder:
             return self._value
         with self._lock:
             if self._value is None or signature != self._signature:
-                self._value = compute_build_id(self._web_dir)
+                self._value = compute_build_id(
+                    self._web_dir, self._backend_fingerprint
+                )
                 self._signature = signature
             return self._value

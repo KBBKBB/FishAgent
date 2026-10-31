@@ -1783,6 +1783,29 @@ h3 {
   display: none !important;
 }
 
+.chat-tool-mic[hidden] {
+  display: none !important;
+}
+
+/* 录音中是"正在进行"而不是"请等待"，所以用红色脉冲表示状态，
+   和上传/识别的绿色脉冲区分开。 */
+.chat-tool-btn.is-recording {
+  background: #fdecec;
+  border-color: #e9a9a9;
+  color: #b42318;
+  animation: mic-pulse 1.2s infinite ease-in-out;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(180, 35, 24, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(180, 35, 24, 0.06);
+  }
+}
+
 @keyframes tool-pulse {
   0%,
   100% {

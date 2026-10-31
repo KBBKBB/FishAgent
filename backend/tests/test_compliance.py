@@ -220,3 +220,43 @@ def test_update_watch_ignores_uninjected_pages():
     index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert 'name="fishagent-build"' in index_html
 
+
+
+# --- 语音输入（CR-06）------------------------------------------------------
+#
+# 两条约束来自功能本身的性质：
+#   1. 识别结果只填进输入框。识别会错，自动发送等于把一次听错变成一条用户
+#      从没问过的问题——和"更新提示不自动刷新"是同一条原则。
+#   2. 能力判断不能靠 webkitSpeechRecognition 是否存在。实测该构造器在非安全
+#      上下文下同样存在，而 navigator.mediaDevices 才真正消失；据构造器显示
+#      按钮，用户会得到一个点了没反应的按钮。
+
+
+def test_voice_result_is_inserted_not_sent():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function sendVoiceForTranscription")
+    end = app_js.index("function toggleVoiceCapture", start)
+    body = app_js[start:end]
+    assert "sendMessage(" not in body, "语音识别结果不得自动发送"
+    assert "input.value = text" in body, "识别结果应填入输入框"
+
+
+def test_voice_capability_check_does_not_trust_the_constructor():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function voiceSupported")
+    end = app_js.index("function updateVoiceButton", start)
+    body = app_js[start:end]
+    assert "isSecureContext" in body, "必须先判安全上下文"
+    assert "mediaDevices" in body, "必须以 mediaDevices 为准"
+    assert "webkitSpeechRecognition" not in body, (
+        "该构造器在非安全上下文下同样存在，不能用作能力判断"
+    )
+
+
+def test_voice_insecure_message_is_not_a_permission_message():
+    """同 2026-10-29 定位那次的错误：把协议问题说成权限被拒。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function startVoiceCapture")
+    end = app_js.index("function finishVoiceCapture", start)
+    body = app_js[start:end]
+    assert "不是权限问题" in body

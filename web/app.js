@@ -55,6 +55,9 @@
     sessionId: makeSessionId(),
     history: [],
     chatBusy: false,
+    voiceBusy: false,
+    voiceRecording: false,
+    voiceCapture: null,
     seq: 0,
     mockMode: MOCK_MODE,
     minRadiusKm: DEFAULT_MIN_RADIUS_KM,
@@ -1883,10 +1886,187 @@
   }
 
   function updateChatControls() {
+    // 语音识别中不禁用输入框：识别期间用户仍可能想直接打字，禁掉只会让人干等。
     var busy = state.chatBusy || state.identifyBusy;
     $('chat-send').disabled = busy;
     $('chat-input').disabled = busy;
     updateIdentifyControls();
+    updateVoiceButton();
+  }
+
+  // --- 语音输入 -----------------------------------------------------------
+  //
+  // 采集在浏览器，识别在后端（见 docs/cr06-voice-input.md）。结果只写进输入框，
+  // 绝不自动发送：识别会错，本地模型对「鲢鳙」「黄颡鱼」这类词尤其容易错，自动
+  // 发送等于把一次听错变成一条用户从没问过的问题。
+
+  var VOICE_SAMPLE_RATE = 16000;
+  var VOICE_MAX_MS = 60000;
+
+  // 能不能用，取决于两件事，且顺序不能反：
+  //   1. 安全上下文（https / localhost）。明文局域网下 mediaDevices 根本不存在。
+  //   2. navigator.mediaDevices 本身。
+  // 不能用「webkitSpeechRecognition 是否存在」来判断——实测该构造器在非安全
+  // 上下文下同样存在，据它显示按钮会得到一个点了没反应的按钮。
+  function voiceSupported() {
+    if (window.isSecureContext === false) return false;
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  function updateVoiceButton() {
+    var button = $('voice-btn');
+    if (!button) return;
+    button.hidden = !voiceSupported();
+    button.disabled = !!(state.chatBusy || state.voiceBusy);
+    button.setAttribute('aria-busy', state.voiceBusy ? 'true' : 'false');
+    button.classList.toggle('is-recording', state.voiceRecording);
+  }
+
+  function floatToPcm16(input) {
+    // 16-bit little-endian，即 Vosk 要的裸 PCM。
+    var out = new DataView(new ArrayBuffer(input.length * 2));
+    for (var i = 0; i < input.length; i += 1) {
+      var sample = Math.max(-1, Math.min(1, input[i]));
+      out.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    }
+    return out.buffer;
+  }
+
+  function stopVoiceCapture() {
+    var current = state.voiceCapture;
+    state.voiceCapture = null;
+    state.voiceRecording = false;
+    if (!current) return;
+    try {
+      if (current.processor) current.processor.disconnect();
+      if (current.source) current.source.disconnect();
+      if (current.context) current.context.close();
+    } catch (error) {
+      // 关闭阶段的异常不影响结果，忽略。
+    }
+    (current.stream.getTracks() || []).forEach(function (track) {
+      track.stop();
+    });
+    updateVoiceButton();
+  }
+
+  function startVoiceCapture() {
+    var button = $('voice-btn');
+    if (state.voiceBusy) return;
+    if (!voiceSupported()) {
+      // 说清楚原因，别让人去找一个改不好的权限开关。
+      setStatus(
+        window.isSecureContext === false
+          ? '当前不是 https 地址，浏览器不提供麦克风（不是权限问题）。请用 https 地址打开，或直接输入文字。'
+          : '当前浏览器不支持录音，请直接输入文字。',
+        'error'
+      );
+      return;
+    }
+    if (button) button.disabled = true;
+    navigator.mediaDevices
+      .getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+      .then(function (stream) {
+        var Context = window.AudioContext || window.webkitAudioContext;
+        if (!Context) throw new Error('浏览器不支持音频处理');
+        var context = new Context({ sampleRate: VOICE_SAMPLE_RATE });
+        var source = context.createMediaStreamSource(stream);
+        var processor = context.createScriptProcessor(4096, 1, 1);
+        var chunks = [];
+        var total = 0;
+        var capture = {
+          stream: stream,
+          context: context,
+          source: source,
+          processor: processor,
+          chunks: chunks
+        };
+        processor.onaudioprocess = function (event) {
+          if (!state.voiceCapture || state.voiceCapture !== capture) return;
+          var data = event.inputBuffer.getChannelData(0);
+          total += data.length;
+          if (total > (VOICE_MAX_MS / 1000) * VOICE_SAMPLE_RATE) {
+            // 到上限就主动收口，不做静默截断。
+            finishVoiceCapture();
+            return;
+          }
+          chunks.push(floatToPcm16(data));
+        };
+        source.connect(processor);
+        processor.connect(context.destination);
+        state.voiceCapture = capture;
+        state.voiceRecording = true;
+        updateVoiceButton();
+        setStatus('正在录音，点一下麦克风结束。', 'info', true);
+      })
+      .catch(function (error) {
+        if (button) button.disabled = false;
+        var name = error && error.name ? String(error.name) : '';
+        var message = '无法使用麦克风，请直接输入文字。';
+        if (name === 'NotAllowedError') {
+          message = '麦克风权限被拒绝，请在浏览器设置中允许本站使用麦克风，或直接输入文字。';
+        } else if (name === 'NotFoundError') {
+          message = '没有找到麦克风设备，请直接输入文字。';
+        }
+        setStatus(message, 'error');
+      });
+  }
+
+  function finishVoiceCapture() {
+    if (!state.voiceCapture) return;
+    var capture = state.voiceCapture;
+    var chunks = capture.chunks.slice();
+    stopVoiceCapture();
+    if (!chunks.length) {
+      setStatus('没有录到声音，请重试或直接输入文字。', 'error');
+      return;
+    }
+    var parts = [];
+    chunks.forEach(function (buffer) {
+      parts.push(new Uint8Array(buffer));
+    });
+    var blob = new Blob(parts, { type: 'application/octet-stream' });
+    sendVoiceForTranscription(blob);
+  }
+
+  function sendVoiceForTranscription(blob) {
+    state.voiceBusy = true;
+    updateChatControls();
+    setStatus('正在识别语音…', 'info', true);
+    var form = new FormData();
+    form.append('audio', blob, 'speech.pcm');
+    form.append('sample_rate', String(VOICE_SAMPLE_RATE));
+    requestJSON(
+      '/api/agent/transcribe',
+      { method: 'POST', body: form },
+      { timeoutMs: 30000 }
+    )
+      .then(function (data) {
+        state.voiceBusy = false;
+        var text = data && typeof data.text === 'string' ? data.text.trim() : '';
+        var input = $('chat-input');
+        if (text && input) {
+          // 只填入，不发送。
+          input.value = text;
+          input.focus();
+          setStatus('已填入识别结果，确认后再点发送。', 'info', true);
+        } else {
+          setStatus('没有听清，请靠近麦克风再说一次，或直接输入文字。', 'error');
+        }
+        updateChatControls();
+      })
+      .catch(function (error) {
+        state.voiceBusy = false;
+        updateChatControls();
+        var message = error && error.message ? String(error.message) : '语音识别失败，请直接输入文字。';
+        setStatus(message, 'error');
+      });
+  }
+
+  function toggleVoiceCapture() {
+    if (state.voiceBusy) return;
+    if (state.voiceRecording) finishVoiceCapture();
+    else startVoiceCapture();
   }
 
   function updateIdentifyControls() {
@@ -2209,6 +2389,14 @@
     var uploadInput = $('identify-upload-input');
     var cameraButton = $('identify-camera-btn');
     var cameraInput = $('identify-camera-input');
+
+    // 麦克风按钮只在真正能用时出现；不能用的原因由 voiceSupported 决定，
+    // 不由构造器是否存在决定（见该函数注释）。
+    var voiceButton = $('voice-btn');
+    if (voiceButton) {
+      voiceButton.hidden = !voiceSupported();
+      voiceButton.addEventListener('click', toggleVoiceCapture);
+    }
 
     // 拍照入口只在触摸设备出现（(pointer: coarse) 或无精确指针的触屏设备）。
     if (cameraButton) cameraButton.hidden = !isTouchDevice();

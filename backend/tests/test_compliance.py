@@ -301,3 +301,54 @@ def test_secret_detector_ignores_css_but_still_catches_a_key():
 
     leaked = 'const key = "sk-proj-AbCdEf0123456789xyzXY";'
     assert any(pattern.search(leaked) for pattern in SECRET_SHAPES)
+
+
+def test_chat_history_uses_session_storage_not_persistent():
+    """The conversation survives a reload, which is the point -- but it must not
+    outlive the tab. localStorage would hand yesterday's chat to whoever opens
+    the browser next on a shared phone."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function saveChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "sessionStorage" in body
+    # The word itself appears in comments explaining the choice, so look for a
+    # call rather than the identifier. Without an exclusion this would fire on
+    # the very comment that documents the rule.
+    assert "localStorage.setItem" not in app_js, "对话不得写入 localStorage"
+    assert "localStorage.getItem" not in app_js
+
+
+def test_chat_history_never_stores_photos_or_object_urls():
+    """An attached photo is a blob: URL that the renderer revokes once the
+    thumbnail loads. Storing it would restore a dead reference and imply the
+    image is still there."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function copyMessageForStorage")
+    end = app_js.index("function saveChat", start)
+    body = app_js[start:end]
+    for banned in ("blob", "objectUrl", "createObjectURL", "image", "file"):
+        assert banned not in body, banned
+
+
+def test_restored_history_is_validated_before_rendering():
+    """sessionStorage on this origin is writable by anything else running here.
+    A malformed entry must be dropped, not rendered."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function readStoredChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "CHAT_STORE_VERSION" in body, "版本不符的旧数据应丢弃"
+    assert "item.role !== 'user'" in body, "角色必须校验"
+    assert "typeof item.content !== 'string'" in body, "内容必须校验"
+
+
+def test_clearing_the_chat_removes_the_stored_copy():
+    """Clearing has to actually delete, not just empty the panel: the stored
+    copy would otherwise come back on the next reload."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function clearChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "clearChatStorage" in body
+    assert "state.history = []" in body

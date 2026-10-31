@@ -7,6 +7,21 @@
   var DEFAULT_LOCATION = MOCK_MODE ? MOCK_DEFAULT_LOCATION : REAL_DEFAULT_LOCATION;
   var DISCLOSURE = '本内容由 AI 生成，仅供参考，不承诺渔获。';
   var HISTORY_LIMIT = 10;
+  // The conversation survives a reload. A phone browser discards the page when
+  // it goes to the background on a memory-pressured device, which for this
+  // feature means losing the question you were typing an answer to.
+  // sessionStorage, not localStorage: the conversation belongs to one tab and
+  // one visit, and a shared phone should not hand yesterday's chat to whoever
+  // opens the browser next.
+  var CHAT_STORE_KEY = 'fishagent.chat.v1';
+  // Bumped when the stored shape changes; an older entry is dropped rather
+  // than half-read.
+  var CHAT_STORE_VERSION = 1;
+  // Messages kept after a reload. The request history is already capped at
+  // 10, so anything beyond that is display-only and this many is plenty.
+  var CHAT_RESTORE_LIMIT = 30;
+  var CHAT_GREETING =
+    '你好，我是 FishAgent 钓鱼助手。可以问我今天的鱼情、附近钓位，或明早的最佳出钓时段。所有建议由 AI 生成，仅供参考。';
   // Search ring. The default matches the innermost option (0–10 km) because
   // that is where the nearest water is, and it is what the page used to show.
   var DEFAULT_MIN_RADIUS_KM = 0;
@@ -554,6 +569,69 @@
     } catch (error) {
       /* storage unavailable; the hint simply reappears next time */
     }
+  }
+
+  function copyMessageForStorage(item) {
+    return {
+      role: item.role,
+      content: item.content,
+      mode: item.mode || null,
+      toolCalls: Array.isArray(item.toolCalls) ? item.toolCalls : null,
+      error: !!item.error
+    };
+  }
+
+  function saveChat() {
+    var payload = {
+      v: CHAT_STORE_VERSION,
+      sessionId: state.sessionId,
+      messages: state.history.slice(-CHAT_RESTORE_LIMIT).map(copyMessageForStorage)
+    };
+    // Text only. An attached photo is a blob URL that the message renderer
+    // deliberately revokes once the thumbnail loads, so a restored entry has
+    // no image to show and must not pretend to.
+    writeSessionValue(CHAT_STORE_KEY, JSON.stringify(payload));
+  }
+
+  function clearChatStorage() {
+    try {
+      window.sessionStorage.removeItem(CHAT_STORE_KEY);
+    } catch (error) {
+      /* nothing to do: the entry expires with the tab anyway */
+    }
+  }
+
+  function readStoredChat() {
+    var raw = readSessionValue(CHAT_STORE_KEY);
+    if (!raw) return null;
+    var payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+    if (!payload || payload.v !== CHAT_STORE_VERSION) return null;
+    var messages = Array.isArray(payload.messages) ? payload.messages : [];
+    var clean = [];
+    for (var i = 0; i < messages.length; i += 1) {
+      var item = messages[i];
+      // Validate rather than trust: storage is writable by anything else on
+      // this origin, and a malformed entry must not break rendering.
+      if (!item || (item.role !== 'user' && item.role !== 'assistant')) continue;
+      if (typeof item.content !== 'string' || !item.content) continue;
+      clean.push({
+        role: item.role,
+        content: item.content,
+        mode: typeof item.mode === 'string' ? item.mode : null,
+        toolCalls: Array.isArray(item.toolCalls) ? item.toolCalls : null,
+        error: !!item.error
+      });
+    }
+    if (!clean.length) return null;
+    return {
+      sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : null,
+      messages: clean
+    };
   }
 
   function syncPwaUi() {
@@ -2460,6 +2538,10 @@
       return { role: item.role, content: item.content };
     });
     state.history.push({ role: 'user', content: message });
+    // Persist before the request: if the page is reloaded or evicted while the
+    // answer is in flight, the question the user actually asked is still there.
+    saveChat();
+    setChatHistoryBarVisible(true);
 
     try {
       var data = await requestJSON('/api/agent/chat', {
@@ -2481,10 +2563,19 @@
         mode: data && data.mode,
         toolCalls: data && data.tool_calls
       });
-      state.history.push({ role: 'assistant', content: reply });
+      // The badges are part of what the user saw, so keep enough to redraw
+      // them: a restored "规则兜底" answer must not come back looking like a
+      // normal model answer.
+      state.history.push({
+        role: 'assistant',
+        content: reply,
+        mode: data && data.mode,
+        toolCalls: data && data.tool_calls
+      });
       if (state.history.length > HISTORY_LIMIT * 2) {
         state.history = state.history.slice(-HISTORY_LIMIT * 2);
       }
+      saveChat();
       if (data && data.fish_activity && typeof data.fish_activity === 'object') {
         renderActivity(data.fish_activity);
       }
@@ -2499,6 +2590,11 @@
           ? error.message
           : '抱歉，服务暂时不可用。请确认后端已启动后再试。';
       appendChatMessage('assistant', chatNotice, { error: true });
+      // A failed request leaves no user message in history (it is popped
+      // above), but the notice was shown, so persist it: reloading should not
+      // erase the fact that the last attempt failed.
+      state.history.push({ role: 'assistant', content: chatNotice, error: true });
+      saveChat();
       setStatus('对话请求失败：' + ((error && error.message) || '未知错误'), 'error');
     } finally {
       state.chatBusy = false;
@@ -2803,6 +2899,8 @@
         sendMessage(button.getAttribute('data-question'));
       });
     });
+    var clearBtn = $('chat-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', clearChat);
     bindIdentifyEvents();
   }
 
@@ -3225,10 +3323,55 @@
     };
   }
 
+  function setChatHistoryBarVisible(visible) {
+    var bar = $('chat-history-bar');
+    if (!bar) return;
+    bar.hidden = !visible;
+  }
+
+  function clearChat() {
+    state.history = [];
+    state.sessionId = makeSessionId();
+    clearChatStorage();
+    setChatHistoryBarVisible(false);
+    var list = $('chat-messages');
+    if (list) list.textContent = '';
+    // The greeting is part of the empty state, not of the conversation: draw
+    // it without adding it to history, or it would be restored as a message
+    // the assistant never actually said, and sent to the server as context.
+    if (list) appendChatMessage('assistant', CHAT_GREETING);
+    setStatus('对话已清空。', 'info');
+  }
+
+  function restoreChat() {
+    var stored = readStoredChat();
+    if (!stored) return;
+    // Reuse the same session id so the server sees a continuing conversation
+    // rather than a brand new one after a reload.
+    if (stored.sessionId) state.sessionId = stored.sessionId;
+    state.history = [];
+    setChatHistoryBarVisible(true);
+    stored.messages.forEach(function (item) {
+      appendChatMessage(item.role, item.content, {
+        mode: item.mode,
+        toolCalls: item.toolCalls,
+        error: item.error
+      });
+      state.history.push({
+        role: item.role,
+        content: item.content,
+        mode: item.mode,
+        toolCalls: item.toolCalls,
+        error: item.error
+      });
+    });
+  }
+
   function init() {
     syncLocationUI();
     $('radius-select').value = state.minRadiusKm + '-' + state.radiusKm;
     bindEvents();
+    restoreChat();
     initPwa();
     if (state.mockMode) {
       setModeBadge('Mock 演示');

@@ -165,6 +165,19 @@
           </div>
           <span class="chat-status" id="chat-status"><span class="badge-dot" aria-hidden="true"></span><span id="chat-status-text">在线</span></span>
         </div>
+        <!-- The conversation is kept in sessionStorage so a reload does not
+             erase it. That makes an obvious exit necessary: on a shared phone
+             the next person to open this tab should be able to start clean
+             without hunting through browser settings. Hidden until there is
+             something to clear. -->
+        <div class="chat-history-bar" id="chat-history-bar" hidden>
+          <!-- Phrased for both cases. "已恢复上次对话" would be a lie during a
+               live session, and the point of saying anything at all is that
+               the conversation now outlives a reload -- which the user has no
+               other way to know. -->
+          <span class="chat-history-text">对话会保留到关闭标签页</span>
+          <button type="button" class="link-btn" id="chat-clear-btn">清空对话</button>
+        </div>
         <div class="quick-questions" role="group" aria-label="示例问题">
           <button type="button" class="chip-btn" data-question="今天气压适合钓鱼吗？">今天气压适合钓鱼吗？</button>
           <button type="button" class="chip-btn" data-question="附近哪里野钓好？">附近哪里野钓好？</button>

@@ -31,6 +31,8 @@ Never commit the output. backend/.env is gitignored for this reason.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -57,6 +59,12 @@ def make_token_secret() -> str:
     return secrets.token_urlsafe(32)
 
 
+def invite_fingerprint(code: str) -> str:
+    """Must match fishagent.pilot.state.invite_fingerprint, so the server's
+    startup log line and this output can be compared directly."""
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:8]
+
+
 def update_env(path: Path, values: dict[str, str]) -> list[str]:
     """Replace the given keys in .env, appending any that are missing.
 
@@ -78,6 +86,36 @@ def update_env(path: Path, values: dict[str, str]) -> list[str]:
     return list(values)
 
 
+def _print_fingerprint() -> int:
+    """Report which code .env currently holds, without revealing it.
+
+    Answers the one question that a "I changed the code and it still won't
+    take" report really has: is the running process serving an older code
+    (needs a restart) or is the value itself not what you think it is?
+    """
+    if not ENV_PATH.exists():
+        print(f"error: {ENV_PATH} does not exist", file=sys.stderr)
+        return 1
+    match = re.search(
+        r"^FISHAGENT_PILOT_INVITE_CODE=(.*)$",
+        ENV_PATH.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    if not match:
+        print("error: FISHAGENT_PILOT_INVITE_CODE is not set in .env", file=sys.stderr)
+        return 1
+    code = match.group(1).strip()
+    if not code:
+        print("error: FISHAGENT_PILOT_INVITE_CODE is empty in .env", file=sys.stderr)
+        return 1
+    print(f"invite code fingerprint: {invite_fingerprint(code)}  (length {len(code)})")
+    print(
+        "compare against the server's startup line:\n"
+        '  "pilot gate enabled; invite code fingerprint <same value>"'
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -96,7 +134,16 @@ def main(argv: list[str] | None = None) -> int:
         default=INVITE_LENGTH,
         help=f"invite code length (default {INVITE_LENGTH}, minimum {MIN_INVITE})",
     )
+    parser.add_argument(
+        "--fingerprint",
+        action="store_true",
+        help="print the fingerprint of the code currently in .env, to compare "
+        "against the server's startup log line (no changes are made)",
+    )
     args = parser.parse_args(argv)
+
+    if args.fingerprint:
+        return _print_fingerprint()
 
     if args.length < MIN_INVITE:
         parser.error(f"--length must be at least {MIN_INVITE}")
@@ -115,11 +162,20 @@ def main(argv: list[str] | None = None) -> int:
         update_env(ENV_PATH, values)
         print(f"updated {ENV_PATH}")
         print(f"  invite code: {values['FISHAGENT_PILOT_INVITE_CODE']}")
+        print(
+            "  invite fingerprint: "
+            f"{invite_fingerprint(values['FISHAGENT_PILOT_INVITE_CODE'])}"
+        )
         if "FISHAGENT_PILOT_TOKEN_SECRET" in values:
             print("  token secret: rotated -- every existing session is now logged out")
         else:
             print("  token secret: unchanged")
-        print("\nRestart the server for the change to take effect.")
+        print(
+            "\nRestart the server for the change to take effect -- settings are read\n"
+            "once at startup, so until then the old code is still the one accepted.\n"
+            "After the restart, the startup log prints the same fingerprint; if it\n"
+            "differs, the process did not pick up this file."
+        )
     else:
         for key, value in values.items():
             print(f"{key}={value}")

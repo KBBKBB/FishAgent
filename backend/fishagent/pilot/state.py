@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,6 +14,25 @@ from fishagent.pilot.limits import DailyQuotaLedger, SlidingWindowLimiter
 from fishagent.pilot.tokens import TokenSigner
 
 _MIN_INVITE_CODE_LENGTH = 6
+
+logger = logging.getLogger(__name__)
+
+
+def invite_fingerprint(code: str) -> str:
+    """A short hash of the invite code, to name it in logs without printing it.
+
+    Editing .env has no effect until the process restarts, because the code is
+    read once at startup. Without this line the running process gives no sign
+    of which code it is still honouring, which makes "I changed it and it
+    doesn't work" indistinguishable from "I typed it wrong". Comparing this
+    fingerprint against ``gen-pilot-secrets.py --fingerprint`` settles it.
+
+    Eight hex characters of SHA-256 is enough to tell two codes apart; it is
+    not a password hash and is not meant to resist an offline search -- the
+    code itself is never logged, and this cannot be run backwards cheaply
+    enough to matter for a 20-character random string.
+    """
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass
@@ -58,6 +78,14 @@ class PilotState:
             raise RuntimeError(
                 f"invalid FISHAGENT_QUOTA_DAY_TIMEZONE: {settings.quota_day_timezone}"
             ) from exc
+
+        # Say which invite code this process is honouring, without printing it.
+        # Settings are read once at startup, so a .env edit does nothing until
+        # a restart -- and a stale code is otherwise silent.
+        logger.info(
+            "pilot gate enabled; invite code fingerprint %s (from .env at startup)",
+            invite_fingerprint(invite_code),
+        )
 
         return cls(
             invite_code=invite_code,

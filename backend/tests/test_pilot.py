@@ -616,3 +616,37 @@ def test_generator_invite_alphabet_has_no_lookalikes():
     assert len(code) == module.INVITE_LENGTH >= module.MIN_INVITE
     assert set(code) <= set(module.INVITE_ALPHABET)
     assert len(module.make_token_secret()) >= module.MIN_SECRET
+
+
+def test_startup_names_the_code_by_fingerprint_not_value(build_app, caplog):
+    """A stale invite code is otherwise silent: editing .env does nothing until
+    a restart, and the process gives no sign of which code it still honours.
+    The startup line answers that -- but must not print the code."""
+    with caplog.at_level("INFO"):
+        build_app()
+    line = next(
+        (r.getMessage() for r in caplog.records if "invite code fingerprint" in r.getMessage()),
+        None,
+    )
+    assert line is not None, "启动日志应说明当前生效的邀请码"
+    assert INVITE_CODE not in line, "日志不得包含邀请码原文"
+    from fishagent.pilot.state import invite_fingerprint
+
+    assert invite_fingerprint(INVITE_CODE) in line
+
+
+def test_generator_fingerprint_matches_the_server():
+    """The whole point is comparing the two outputs; they must be the same
+    function, not two similar ones."""
+    import importlib.util
+    from pathlib import Path
+
+    from fishagent.pilot.state import invite_fingerprint as server_side
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "gen-pilot-secrets.py"
+    spec = importlib.util.spec_from_file_location("gen_pilot_secrets", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for code in ("abc", INVITE_CODE, "x" * 20):
+        assert module.invite_fingerprint(code) == server_side(code)

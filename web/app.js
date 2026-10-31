@@ -58,6 +58,12 @@
     voiceBusy: false,
     voiceRecording: false,
     voiceCapture: null,
+    // Whether the server can actually recognise speech. Starts false and is
+    // only turned on by a /health answer: a mic button that throws 501 on
+    // every press is worse than no button, and the page cannot know before
+    // asking. Browsers can capture audio here long before the backend is
+    // configured to make sense of it.
+    voiceBackendReady: false,
     seq: 0,
     mockMode: MOCK_MODE,
     minRadiusKm: DEFAULT_MIN_RADIUS_KM,
@@ -939,6 +945,10 @@
     try {
       var health = await requestJSON('/health');
       setModeBadge(health && health.mock_mode ? 'Mock 模式' : '在线数据');
+      // The mic button appears only once the server says it can transcribe.
+      // Silence when the field is absent (older server) reads as "no".
+      state.voiceBackendReady = !!(health && health.speech_enabled);
+      updateVoiceButton();
     } catch (error) {
       setModeBadge('服务未连接');
       setStatus(
@@ -1916,7 +1926,10 @@
   function updateVoiceButton() {
     var button = $('voice-btn');
     if (!button) return;
-    button.hidden = !voiceSupported();
+    // Two independent conditions. The browser must be able to capture, and
+    // the server must be able to recognise. Both are required; either one
+    // failing means the button would not do what its label promises.
+    button.hidden = !(voiceSupported() && state.voiceBackendReady);
     button.disabled = !!(state.chatBusy || state.voiceBusy);
     button.setAttribute('aria-busy', state.voiceBusy ? 'true' : 'false');
     button.classList.toggle('is-recording', state.voiceRecording);

@@ -29,6 +29,38 @@ logger = logging.getLogger(__name__)
 EXPECTED_SAMPLE_RATE = 16_000
 _BYTES_PER_SAMPLE = 2
 
+_HAN_START = "一"
+_HAN_END = "鿿"
+
+
+def join_han_tokens(text: str) -> str:
+    """Remove the spaces Vosk puts between Chinese words.
+
+    Vosk tokenises Chinese into words and joins the result with spaces, so
+    "鲢鳙用什么饵料" comes back as "鲢 鳙 用 什么 饵料". Everything downstream
+    (intent regexes, species matching) reads natural sentences, so a space
+    between two Han characters breaks matching in two ways: multi-character
+    species split apart ("鲢 鳙" is no longer 鲢鳙), and phrase patterns such
+    as 用什么 stop matching.
+
+    Only Han-Han boundaries are joined. A Latin or numeric token keeps its
+    separators, so "16 度" does not become "16度" glued to the next word.
+    """
+    tokens = [token for token in text.split(" ") if token]
+    if not tokens:
+        return ""
+    joined = tokens[0]
+    for token in tokens[1:]:
+        if _is_han(joined[-1]) and _is_han(token[0]):
+            joined += token
+        else:
+            joined += " " + token
+    return joined
+
+
+def _is_han(char: str) -> bool:
+    return _HAN_START <= char <= _HAN_END
+
 
 class VoskSpeechProvider:
     """Wraps a Vosk model loaded once at startup.
@@ -98,7 +130,9 @@ class VoskSpeechProvider:
             logger.warning("vosk returned unparsable result")
             raise SpeechFailed("语音识别结果无法解析") from None
         text = payload.get("text")
-        return str(text).strip() if isinstance(text, str) else ""
+        if not isinstance(text, str):
+            return ""
+        return join_han_tokens(text.strip())
 
     async def transcribe(self, pcm: bytes, sample_rate: int) -> str:
         return await asyncio.to_thread(self._recognise, pcm, sample_rate)
@@ -106,5 +140,10 @@ class VoskSpeechProvider:
 
 def model_available(path: Path | str) -> bool:
     """Whether a model directory looks usable, for a startup log line."""
+    # Guard the empty string explicitly: Path("") is Path("."), so an unset
+    # model path would otherwise report the current working directory -- which
+    # is of course non-empty -- as a valid model.
+    if not str(path).strip():
+        return False
     target = Path(path)
     return target.is_dir() and any(target.iterdir())

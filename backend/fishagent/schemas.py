@@ -286,6 +286,10 @@ class HealthResponse(BaseModel):
     # Empty only if the web directory is missing.
     build: str = ""
     mock_mode: bool
+    # Whether the server can recognise speech (CR-06). The page hides the mic
+    # button unless this is true, so it never offers a control whose only
+    # possible answer is 501. Absent from older servers, which reads as false.
+    speech_enabled: bool = False
 
 
 class DemoConfigResponse(BaseModel):

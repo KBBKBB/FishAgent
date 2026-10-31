@@ -260,3 +260,18 @@ def test_voice_insecure_message_is_not_a_permission_message():
     end = app_js.index("function finishVoiceCapture", start)
     body = app_js[start:end]
     assert "不是权限问题" in body
+
+
+def test_voice_button_needs_the_backend_too():
+    """采集能力不等于识别能力。后端没开识别时，按钮点了只会拿到 501；宁可
+    不显示，也不给一个必然失败的控件。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function updateVoiceButton")
+    end = app_js.index("function floatToPcm16", start)
+    body = app_js[start:end]
+    assert "voiceSupported()" in body
+    assert "voiceBackendReady" in body, "后端未就绪时不得显示麦克风按钮"
+
+    start = app_js.index("async function checkHealth")
+    end = app_js.index("}\n\n", app_js.index("updateVoiceButton();", start))
+    assert "speech_enabled" in app_js[start:end], "/health 应告知能否识别"

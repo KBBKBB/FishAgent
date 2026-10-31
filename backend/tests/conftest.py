@@ -31,6 +31,12 @@ os.environ["FISHAGENT_SPECIES_PAGE_FETCH"] = "false"
 # explicitly.
 os.environ["FISHAGENT_PUBLIC_ACCESS_ENABLED"] = "false"
 
+# Same reasoning for the speech provider: whether this host happens to have a
+# Vosk model installed is a deployment fact, not product behaviour. Pinning it
+# off keeps /health deterministic; the voice tests configure it per case.
+os.environ["FISHAGENT_SPEECH_PROVIDER"] = "none"
+os.environ["FISHAGENT_SPEECH_MODEL_PATH"] = ""
+
 HANGZHOU = {"lat": 30.2741, "lon": 120.1551}
 BEIJING = {"lat": 39.915, "lon": 116.404}
 AT_UTC = "2026-10-21T10:00:00Z"

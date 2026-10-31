@@ -175,3 +175,40 @@ def test_failure_messages_do_not_blame_the_photo_style(client, override_provider
     message = post(client).json()["detail"]["message"]
     for word in ("格式", "不清晰", "文件损坏"):
         assert word not in message, (word, message)
+
+
+# --- Vosk token re-joining ---------------------------------------------------
+# Vosk returns Chinese words separated by spaces ("鲢 鳙 用 什么 饵料"). The
+# rest of the pipeline reads natural text, so a space between Han characters
+# both splits species names apart and stops phrase regexes from matching.
+# These tests pin the join rule; they do not need the engine installed.
+from fishagent.providers.speech_vosk import join_han_tokens  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("鲢 鳙 用 什么 饵料", "鲢鳙用什么饵料"),
+        ("今天 气压 适合 钓鱼 吗", "今天气压适合钓鱼吗"),
+        ("鲫鱼 用 什么 饵料", "鲫鱼用什么饵料"),
+        ("", ""),
+        ("   ", ""),
+        ("饵料", "饵料"),
+    ],
+)
+def test_han_tokens_are_joined(raw, expected):
+    assert join_han_tokens(raw) == expected
+
+
+def test_non_han_boundaries_keep_their_separator():
+    """Joining is for Chinese only. "16 度" must stay two tokens, or the
+    number fuses into the following word."""
+    assert join_han_tokens("气温 16 度 适合 钓鱼") == "气温 16 度适合钓鱼"
+
+
+def test_join_makes_a_split_species_matchable():
+    """The point of joining: "鲢 鳙" is not a species, "鲢鳙" is."""
+    from fishagent.core.species import canonical_species
+
+    assert canonical_species("鲢 鳙 用 什么 饵料") is None
+    assert canonical_species(join_han_tokens("鲢 鳙 用 什么 饵料")) == "鲢鳙"

@@ -17,7 +17,15 @@ SECRET_PATTERNS = (
     "AMAP_WEB_KEY",
     "LLM_API_KEY",
     "OPEN_METEO_KEY",
-    "sk-",
+)
+
+# Keys are matched by shape, not by the bare prefix. "sk-" on its own is a
+# three-character substring that shows up in ordinary CSS -- `mask-image`
+# tripped it while fixing the chat layout -- and a detector that cries wolf
+# gets weakened or deleted. The shape below is what an actual key looks like:
+# the prefix followed by a long run of key characters.
+SECRET_SHAPES = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
 )
 
 DIRECT_ENDPOINTS = (
@@ -39,6 +47,10 @@ def test_web_sources_contain_no_key_or_direct_provider_calls():
         for pattern in SECRET_PATTERNS:
             if pattern in text:
                 findings.append(f"{name} 含敏感串 {pattern!r}")
+        for shape in SECRET_SHAPES:
+            match = shape.search(text)
+            if match:
+                findings.append(f"{name} 含疑似密钥 {match.group()[:8]!r}...")
         for endpoint in DIRECT_ENDPOINTS:
             if endpoint in text:
                 findings.append(f"{name} 直连第三方 {endpoint}")
@@ -275,3 +287,17 @@ def test_voice_button_needs_the_backend_too():
     start = app_js.index("async function checkHealth")
     end = app_js.index("}\n\n", app_js.index("updateVoiceButton();", start))
     assert "speech_enabled" in app_js[start:end], "/health 应告知能否识别"
+
+
+def test_secret_detector_ignores_css_but_still_catches_a_key():
+    """The detector used to flag the three characters "sk-" anywhere, so
+    `mask-image` in styles.css read as a leaked OpenAI key. A check that
+    fails on ordinary CSS gets weakened or deleted; this one matches the shape
+    of a key instead, and these two cases keep it honest in both directions."""
+    from test_compliance import SECRET_SHAPES
+
+    css = "mask-image: linear-gradient(90deg, #000, transparent);"
+    assert not any(pattern.search(css) for pattern in SECRET_SHAPES)
+
+    leaked = 'const key = "sk-proj-AbCdEf0123456789xyzXY";'
+    assert any(pattern.search(leaked) for pattern in SECRET_SHAPES)

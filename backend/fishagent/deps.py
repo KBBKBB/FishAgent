@@ -104,3 +104,34 @@ def get_species_provider() -> SpeciesProvider:
         return NullSpeciesProvider()
     logger.warning("unknown FISHAGENT_SPECIES_PROVIDER=%s; using none", choice)
     return NullSpeciesProvider()
+
+
+_SPEECH_PROVIDER: object | None = None
+
+
+def get_speech_provider() -> object:
+    """One cached speech provider.
+
+    Cached process-wide because the Vosk model is tens of megabytes and must be
+    loaded once, not per request. Tests override this dependency instead of
+    touching the singleton.
+    """
+    global _SPEECH_PROVIDER
+    if _SPEECH_PROVIDER is not None:
+        return _SPEECH_PROVIDER
+
+    from fishagent.providers.speech_none import NullSpeechProvider
+
+    settings = get_settings()
+    choice = (settings.speech_provider or "").strip().lower()
+    if not choice or choice in ("none", "disabled"):
+        _SPEECH_PROVIDER = NullSpeechProvider()
+        return _SPEECH_PROVIDER
+    if choice == "vosk":
+        from fishagent.providers.speech_vosk import VoskSpeechProvider
+
+        _SPEECH_PROVIDER = VoskSpeechProvider(settings.speech_model_path)
+        return _SPEECH_PROVIDER
+    logger.warning("unknown FISHAGENT_SPEECH_PROVIDER=%s; using none", choice)
+    _SPEECH_PROVIDER = NullSpeechProvider()
+    return _SPEECH_PROVIDER

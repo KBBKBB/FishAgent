@@ -18,6 +18,7 @@ from fishagent.api.identify import router as identify_router
 from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
 from fishagent.api.spots import router as spots_router
+from fishagent.api.transcribe import router as transcribe_router
 from fishagent.config import get_settings
 from fishagent.core.image_guard import sync_pillow_limits
 from fishagent.errors import ApiError, register_exception_handlers
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
     app.include_router(species_router)
     app.include_router(_agent_router())
     app.include_router(identify_router)
+    app.include_router(transcribe_router)
     if pilot_state is not None:
         app.include_router(pilot_router)
 

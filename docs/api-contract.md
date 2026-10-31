@@ -24,6 +24,7 @@
 > v2.8（2026-10-30）：新增 4.8 静态资源缓存与版本提示。shell 资源改 `no-cache`，`/health` 增加内容哈希 `build` 字段并注入 `index.html`，页面轮询发现新版本后提示、由用户自己点刷新。`/health` 响应新增 `build`（向后兼容的增量字段）。
 > v2.9（2026-10-30）：钓位推荐不再总是「离你最近的几个」——评估池按方向扇区 × 距离环取样，分页前做间距交错，同名水体先去重；`meta` 增加 `selection_strategy` / `min_separation_m` / `separation_relaxed` 三个增量字段。
 > v2.10（2026-10-30）：搜索半径改为**环带**。新增 `min_radius_km`（默认 0，旧调用行为不变），前端改为 0–10 / 10–50 / 50–100 / 100–150 四档；`filtered` 增加 `within_min_radius`，`meta` 增加 `min_radius_km`。
+> v2.12（2026-10-31）：新增 4.9 `POST /api/agent/transcribe`（语音输入）。浏览器采集 16 kHz 单声道 PCM 上传，后端用 Vosk 离线识别；返回文本但**不自动发送**。失败分为 `SPEECH_EMPTY`/`SPEECH_FAILED`/`SPEECH_UNAVAILABLE`，不得把系统故障说成用户没说清。**不新增第三方调用**，前端仍零密钥。
 > v2.11（2026-10-30）：4.4 新增 `bait` 意图（饵料/窝料/味型/钓法），由 `core/bait.py` 的确定性表作答，不依赖 LLM 与工具；查询中的鱼种改按全量 `KNOWN_SPECIES` 解析（原自带四鱼种表 + 鲫/鲤单字别名，使「白条用什么饵料」落到通用指南）。4.6 结果新增 `baits`，逐项与 `species` 对应。4.5b 约定定位成功后清空地名输入框。`baits` 为向后兼容的增量字段。
 > 上游依据：`Spec/Mission.md`、`Spec/TechStack.md`、`项目立项文档.md` 第 2.4 节。
 
@@ -523,6 +524,50 @@ Step 1 的定位入口。经纬度对普通用户没有意义——钓鱼的人�
 - meta 里仍是占位符 `__FISHAGENT_BUILD__`（说明这份 HTML 不是本应用发的，例如 `file://` 或陈旧代理）时，视为未知版本并完全关闭检测，否则每次轮询都会误报有更新。
 
 **与 Service Worker 的关系**：SW 侧仍是 shell 资源 network-first + `skipWaiting` + `clients.claim`。但**手机上目前不注册 SW**（明文 http 非安全上下文，见 4.5b），所以上述 HTTP 缓存策略是手机端唯一的实际保障，不能指望 SW。
+
+### 4.9 `POST /api/agent/transcribe`（CR-06，语音输入）
+
+把一段说话转成文字。`Content-Type: multipart/form-data`。
+
+| 字段 | 类型 | 必填 | 约束 |
+|---|---|---|---|
+| `audio` | file | 是 | 16 kHz 单声道 16-bit 小端 PCM；时长 ≤ `FISHAGENT_SPEECH_MAX_SECONDS`（默认 60s） |
+| `sample_rate` | text | 否 | 默认 16000，且**必须**是 16000 |
+
+成功 200：
+
+```json
+{
+  "text": "鲫鱼用什么饵料",
+  "provider": "vosk",
+  "ai_disclosure": "本内容由 AI 生成，仅供参考，不承诺渔获。",
+  "generated_at": "2026-10-31T10:00:00Z"
+}
+```
+
+**返回文本，不返回对话轮次**：调用方把 `text` 填进输入框，由用户确认后自己发送。识别错误（尤其本地模型对钓鱼术语）直接发送会把一次听错变成一条用户没问过的回答。
+
+口径：
+
+- **音频只在内存**：流式读取并计数上限（不信 `Content-Length`），不落盘、不缓存、不写日志——含不把 PCM、base64 或识别出的文本写进日志。与 4.7 图片同一条约束。
+- **采样率必须 16000**：浏览器用 `AudioContext({sampleRate:16000})` 直接产出该格式，实测可用；因此**不需要 ffmpeg** 转码。
+- **空结果与失败必须分开**，都是 422 但 code 不同：
+  | 情况 | HTTP | code | 能否让用户改进 |
+  |---|---|---|---|
+  | 引擎跑了，没听到声音 | 422 | `SPEECH_EMPTY` | 能（「靠近麦克风再说一次」） |
+  | 引擎报错 | 422 | `SPEECH_FAILED` | 不能（重试或改用文字） |
+  | 引擎不可用（未装/无模型） | 501 | `SPEECH_UNAVAILABLE` | 不能（功能未启用） |
+  | 提供方意外异常 | 503 | `SPEECH_UNAVAILABLE` | 不能 |
+  | 采样率不符 | 415 | `AUDIO_INVALID` | — |
+  | 音频为空 | 415 | `AUDIO_INVALID` | — |
+  | 超时长 | 413 | `AUDIO_TOO_LARGE` | 能（说短一点） |
+
+  区分 `SPEECH_EMPTY` 与 `SPEECH_FAILED` 的理由，与 4.7 区分超时和格式错误相同：把系统故障说成用户没说清楚是要用户去修一个不是他造成的问题。
+- **不得出现"不清晰/格式/文件损坏"等归因于用户的措辞**（测试锁定）。
+- 文本截断到 500 字，与 `POST /api/agent/chat` 的 `message` 上限一致。
+- `FISHAGENT_SPEECH_PROVIDER`：`vosk` / `none`。留空视为 `none`；未知值告警后按 `none`。`vosk` 需要 `FISHAGENT_SPEECH_MODEL_PATH` 指向已解压的模型目录。
+- 引擎是同步且 CPU 密集的，**必须放到线程里跑**（`asyncio.to_thread`），否则会阻塞事件循环整个时长。
+- 前端能力判断**不得**依赖「`webkitSpeechRecognition` 是否存在」：实测该构造器在非安全上下文下**同样存在**，而 `navigator.mediaDevices` 才真正消失。正确顺序是先判 `isSecureContext`，再判 `mediaDevices`。
 
 ## 5. Mock 数据要求
 

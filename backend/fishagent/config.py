@@ -150,6 +150,31 @@ class Settings(BaseSettings):
         validation_alias="FISHAGENT_SPECIES_PAGE_FETCH",
     )
 
+    # CR-06 voice input. The browser captures audio and posts 16-bit mono PCM;
+    # transcription happens here so the page keeps its "no keys, no direct
+    # third-party calls" property. "none" disables the feature honestly rather
+    # than failing at the point of use.
+    speech_provider: str = Field(
+        default="none", validation_alias="FISHAGENT_SPEECH_PROVIDER"
+    )
+    speech_model_path: str = Field(
+        default="", validation_alias="FISHAGENT_SPEECH_MODEL_PATH"
+    )
+    speech_timeout_seconds: float = Field(
+        default=20.0,
+        ge=2,
+        le=120,
+        validation_alias="FISHAGENT_SPEECH_TIMEOUT_SECONDS",
+    )
+    # 60 s of 16 kHz mono 16-bit PCM is ~1.9 MB; the cap is on the decoded raw
+    # audio, not the request body, so it does not depend on transport encoding.
+    speech_max_seconds: float = Field(
+        default=60.0,
+        ge=5,
+        le=300,
+        validation_alias="FISHAGENT_SPEECH_MAX_SECONDS",
+    )
+
     # CR-03 pilot access. Every field below is inert unless
     # FISHAGENT_PUBLIC_ACCESS_ENABLED=true, so the S1 deployment is unchanged.
     public_access_enabled: bool = Field(

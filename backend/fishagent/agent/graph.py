@@ -17,6 +17,11 @@ class AgentState(TypedDict, total=False):
     location: dict[str, Any]
     session_id: str
     history: list[dict[str, str]]
+    # The caller's pilot token, when the gate is on. The tools re-enter the app
+    # through the ASGI app and are therefore subject to the same middleware as
+    # any other request; without this they arrive unauthenticated and every
+    # tool call fails with 401.
+    auth_token: str | None
     intents: list[str]
     species: str | None
     tool_calls: list[dict[str, Any]]
@@ -63,6 +68,7 @@ async def call_tools(state: AgentState) -> dict[str, Any]:
     # an error: ask for the general activity instead and let the bait table
     # supply the species-specific part.
     activity_species = species if species in llm.ALLOWED_SPECIES else None
+    auth_token = state.get("auth_token")
 
     if "fish" in intents or "time" in intents:
         args: dict[str, Any] = {"lat": lat, "lon": lon}
@@ -74,6 +80,7 @@ async def call_tools(state: AgentState) -> dict[str, Any]:
                 lon,
                 species=activity_species,
                 location_name=location_name,
+                auth_token=auth_token,
             )
             tool_calls.append({"name": "get_fish_activity", "args": args, "status": "ok"})
         except Exception:
@@ -85,7 +92,9 @@ async def call_tools(state: AgentState) -> dict[str, Any]:
         if species:
             args["species"] = species
         try:
-            spots = await tools.recommend_spots(lat, lon, species=species)
+            spots = await tools.recommend_spots(
+                lat, lon, species=species, auth_token=auth_token
+            )
             tool_calls.append({"name": "recommend_spots", "args": args, "status": "ok"})
         except Exception:
             logger.warning("recommend_spots tool failed", exc_info=True)

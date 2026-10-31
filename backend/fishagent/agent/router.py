@@ -6,7 +6,7 @@ import logging
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
 from fishagent.agent import llm
@@ -65,13 +65,17 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(payload: ChatRequest) -> ChatResponse:
+async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     session_id = (payload.session_id or "").strip() or uuid4().hex
     state: dict[str, Any] = {
         "message": payload.message,
         "location": payload.location.model_dump(),
         "session_id": session_id,
         "history": [item.model_dump() for item in payload.history[-MAX_HISTORY:]],
+        # Set by the pilot middleware once it has verified the caller. The tools
+        # call back into this same app, so they need to present this token or
+        # they arrive as an anonymous request and fail with 401.
+        "auth_token": getattr(request.state, "pilot_token", None),
     }
 
     try:

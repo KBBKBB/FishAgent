@@ -28,13 +28,14 @@ async def get_fish_activity(
     *,
     species: str | None = None,
     location_name: str | None = None,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {"lat": lat, "lon": lon}
     if species:
         params["species"] = species
     if location_name:
         params["location_name"] = location_name
-    return await _request("/api/fish-activity", params)
+    return await _request("/api/fish-activity", params, auth_token)
 
 
 async def recommend_spots(
@@ -44,6 +45,7 @@ async def recommend_spots(
     species: str | None = None,
     radius_km: float = 100,
     limit: int = 5,
+    auth_token: str | None = None,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {
         "lat": lat,
@@ -53,15 +55,23 @@ async def recommend_spots(
     }
     if species:
         params["species"] = species
-    return await _request("/api/spots/recommend", params)
+    return await _request("/api/spots/recommend", params, auth_token)
 
 
-async def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
+async def _request(
+    path: str, params: dict[str, Any], auth_token: str | None = None
+) -> dict[str, Any]:
     # Imported lazily: main.py mounts agent.router, so a top-level import would cycle.
     from fishagent.main import app
 
     timeout_seconds = _tool_timeout_seconds()
     transport = httpx.ASGITransport(app=app)
+    # The tool re-enters the app through the full middleware stack, so when the
+    # pilot gate is on, this request is subject to it like any other. Forwarding
+    # the caller's token makes the tool act as that user: the gate's own rules
+    # still apply (no bypass path is introduced), and per-token rate limiting
+    # and quota accounting see internal calls as the same caller they belong to.
+    headers = {"authorization": f"Bearer {auth_token}"} if auth_token else {}
     try:
         async with httpx.AsyncClient(
             transport=transport,
@@ -70,7 +80,7 @@ async def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
         ) as client:
             # ASGITransport does not enforce client timeouts; wait_for is the real guard.
             response = await asyncio.wait_for(
-                client.get(path, params=params),
+                client.get(path, params=params, headers=headers),
                 timeout=timeout_seconds,
             )
     except (asyncio.TimeoutError, httpx.TimeoutException) as exc:

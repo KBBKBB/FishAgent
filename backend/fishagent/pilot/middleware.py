@@ -145,6 +145,10 @@ class PilotAccessMiddleware(BaseHTTPMiddleware):
 
         request.state.pilot_ip = ip
         request.state.pilot_token_fp = fingerprint
+        # Downstream (the agent's internal tool calls) re-enters the app and is
+        # therefore authenticated again. Handing it the caller's token is what
+        # keeps that second check honest instead of bypassing it.
+        request.state.pilot_token = token
         response = await call_next(request)
         if path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store")

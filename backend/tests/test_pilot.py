@@ -650,3 +650,48 @@ def test_generator_fingerprint_matches_the_server():
 
     for code in ("abc", INVITE_CODE, "x" * 20):
         assert module.invite_fingerprint(code) == server_side(code)
+
+
+def test_agent_tools_work_while_the_gate_is_on(build_app, monkeypatch):
+    """The tools call the API back through the same ASGI app, so the gate sees
+    those requests too. Before this was handled, every tool call arrived with
+    no cookie, got 401, and the agent answered "鱼情数据暂时不可用" to a
+    question the service could answer perfectly well -- while the endpoint
+    itself returned 200 to a browser.
+
+    The gap existed because the suite pins the gate off (conftest.py), so this
+    path was never exercised with it on. Ask a question that needs a tool and
+    assert the tool actually returned data.
+    """
+    # tools._request imports `fishagent.main.app` -- the module-level instance,
+    # which is built at import time with the gate off. Point it at the gated
+    # app this test just built, or the tool calls a different app that has no
+    # middleware and the test silently proves nothing.
+    app = build_app()
+    monkeypatch.setattr("fishagent.main.app", app)
+    with TestClient(app, base_url="https://testserver") as client:
+        login_client(client)
+        response = client.post(
+            "/api/agent/chat",
+            json={"message": "今天气压适合钓鱼吗？", "location": {"lat": 30.27, "lon": 120.15}},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        calls = {call["name"]: call["status"] for call in body["tool_calls"]}
+        assert calls.get("get_fish_activity") == "ok", body["tool_calls"]
+        assert body["fish_activity"] is not None
+        assert "不可用" not in body["reply"], body["reply"]
+
+
+def test_tools_still_require_a_token(build_app, monkeypatch):
+    """Forwarding the caller's token must not weaken the gate: a tool call made
+    without one is still refused. Otherwise "fix the internal call" would be
+    "add an auth bypass"."""
+    import asyncio
+
+    from fishagent.agent import tools
+
+    app = build_app()
+    monkeypatch.setattr("fishagent.main.app", app)
+    with pytest.raises(tools.ToolError):
+        asyncio.run(tools.get_fish_activity(30.27, 120.15))

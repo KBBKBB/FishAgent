@@ -14,7 +14,22 @@
 | 手机访问局域网明文 HTTP 不是安全上下文 | `serve.bat` 走 `http://192.168.31.68:8018` | 浏览器语音 API；`MediaRecorder` 的采集也可能被拒 |
 | 本机到 Google 不通 | `www.google.com` / `speech.googleapis.com` 均 8s 超时（实测） | Chrome 自带的 Web Speech API |
 
-结论：**手机端要用语音，必须先把访问方式切到 HTTPS**（`serve-https.bat` + mkcert，证书已在且 SAN 覆盖 `192.168.31.68`，有效期至 2029-01-24，均已实测）。这与 CR-03 里"回到 HTTP"的权衡是同一件事，只是语音把它的代价推到了不能再忽略的位置。
+结论：~~手机端要用语音，必须先把访问方式切到 HTTPS~~ —— **此结论已于 2026-10-31 被内网穿透推翻**，见 §2.6。
+
+### 1.1 状态更新（2026-10-31 晚间，实测）
+
+人类选择了**不切 `serve-https.bat`**，改用 https 内网穿透（`https://130ww5xp96060.vicp.fun` → 本机 `8018` 明文）。实测该域名下：
+
+| 探测项 | 结果 |
+|---|---|
+| `location.origin` | `https://130ww5xp96060.vicp.fun` |
+| `isSecureContext` | **true** |
+| `navigator.mediaDevices` | **存在** |
+| `getUserMedia({audio:true})` | **ok** |
+| `AudioContext({sampleRate:16000})` | 16000 |
+| PCM 采集 | 1 秒得 12288 样本（0.77s） |
+
+隧道在 TLS 层终结，浏览器看到的是 https 源，**麦克风完全可用**。§2.1 里明文局域网下 `mediaDevices` 不存在的问题不再构成阻塞。
 
 ## 2. 实测证据
 
@@ -117,8 +132,7 @@ web/app.js  ──采集 PCM──▶  POST /api/agent/transcribe
 
 | 问题 | 建议 |
 |---|---|
-| 手机怎么用语音？ | 切 `serve-https.bat`，接受 mkcert 根证书的一次性安装。语音、定位、PWA 三者会一起恢复——这可能是把 HTTPS 换回来的最好理由。 |
-| 短期内不想切 HTTPS？ | 麦克风按钮在手机上置灰，如实提示"需要 https 地址"。电脑用 `localhost` 打开可用（localhost 算安全上下文，实测）。**不得**做一个点了没反应的按钮。 |
+| 手机怎么用语音？ | ~~切 `serve-https.bat`~~ **已由内网穿透解决**（2026-10-31 实测）。 |
 | 本地模型准确率不够怎么办？ | 先按本地方案实现并用真实语音样本验收；若钓鱼术语错得多，provider 接口已经留好，接云端只需加一个实现。 |
 
 ## 6. 验收（建议）
@@ -129,6 +143,23 @@ web/app.js  ──采集 PCM──▶  POST /api/agent/transcribe
 4. 识别失败按失败类型给出不同文案，不含"没听清"这类把系统故障说成用户问题的表述。
 5. 音频不上传第三方（用 `test_compliance.py` 的同类静态检查锁死）。
 6. 后端全量 pytest、ruff 通过。
+
+## 6.1 鉴权（2026-10-31 先行完成）
+
+穿透使服务可从公网访问，而当时 `public_access_enabled=false`、CORS 为 `*`，**任何拿到域名的人都能无限调用并烧掉高德与 LLM 额度**。已先行开启 pilot 访问门（`backend/.env`，不入库）：
+
+| 配置 | 值 | 理由 |
+|---|---|---|
+| `FISHAGENT_PUBLIC_ACCESS_ENABLED` | `true` | 挂上鉴权 + 限流中间件 |
+| `FISHAGENT_PILOT_CORS_ORIGINS` | 隧道域名 + localhost | 不再用 `*` |
+| `FISHAGENT_PILOT_COOKIE_SECURE` | `true` | 隧道是 https |
+| `FISHAGENT_PILOT_TRUST_PROXY_HEADERS` | **`false`** | **见下** |
+
+**为什么 `TRUST_PROXY_HEADERS` 必须是 false**：文档原前提是"源站只监听回环、只有隧道客户端能连"。实际情况不满足——uvicorn 监听 `0.0.0.0:8018`，实测 `http://192.168.31.68:8018/health` 直连返回 200，且本机抓不到任何隧道客户端的连接（客户端可能在路由器或另一台设备上）。在这种拓扑下信任 `X-Forwarded-For` 等于让调用方随手伪造来源 IP、绕过按 IP 限流。
+
+代价：所有隧道请求共用一个 IP 桶（相当于全局每分钟 60 次）。按 token 的限流与日配额账本仍然生效，所以额度不会被刷穿，只是整体吞吐有上限。
+
+**已知限制**：Cookie 带 `Secure`，因此**用 `http://192.168.31.68:8018` 访问时会话无法保存**，登录后会一直 401。局域网明文入口只能用于健康检查与排查，不能当日常入口——日常入口是 https 隧道。
 
 ## 7. 未验证 / 风险
 

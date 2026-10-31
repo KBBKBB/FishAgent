@@ -548,3 +548,150 @@ def test_usage_endpoint_requires_login_and_reports_limits(build_app):
         assert body["llm_reserved_per_chat"] == 2
         assert INVITE_CODE not in str(body)
         assert TOKEN_SECRET not in str(body)
+
+
+# --- rotating the two secrets means two different things ---------------------
+#
+# The invite code is checked once, at login. The token secret signs the cookie
+# and is checked on every request. Rotating them is therefore not the same
+# operation, and the script that generates them (scripts/gen-pilot-secrets.py)
+# exposes that difference as --invite-only. These tests pin the behaviour so a
+# future "let's validate the invite code on every request" change cannot land
+# silently -- it would turn "issue a new code" into "log everyone out".
+
+
+def _authenticated(client: TestClient) -> bool:
+    """/api/pilot/session is public and always answers 200; it reports the
+    verdict in the body. Asserting the status code here would pass no matter
+    what the token was."""
+    response = client.get("/api/pilot/session")
+    assert response.status_code == 200, response.text
+    return response.json()["authenticated"]
+
+
+def test_old_token_still_works_after_the_invite_code_changes(build_app):
+    app = build_app()
+    with TestClient(app, base_url="https://testserver") as client:
+        login_client(client)
+        token = client.cookies[COOKIE_NAME]
+
+    # Same token secret, different invite code: a session already issued must
+    # survive. Otherwise handing out a new code would silently evict pilots.
+    new_app = build_app(FISHAGENT_PILOT_INVITE_CODE="a-different-invite-code")
+    with TestClient(new_app, base_url="https://testserver") as client:
+        client.cookies.set(COOKIE_NAME, token)
+        assert _authenticated(client) is True
+        # ...while the old code no longer buys a new session.
+        assert login(client, INVITE_CODE).status_code == 401
+        assert login(client, "a-different-invite-code").status_code == 200
+
+
+def test_rotating_the_token_secret_revokes_existing_sessions(build_app):
+    app = build_app()
+    with TestClient(app, base_url="https://testserver") as client:
+        login_client(client)
+        token = client.cookies[COOKIE_NAME]
+
+    rotated = build_app(FISHAGENT_PILOT_TOKEN_SECRET="another-secret-value-32-bytes-long!!")
+    with TestClient(rotated, base_url="https://testserver") as client:
+        client.cookies.set(COOKIE_NAME, token)
+        assert _authenticated(client) is False
+        assert client.get("/api/fish-activity", params=fish_params()).status_code == 401
+
+
+def test_generator_invite_alphabet_has_no_lookalikes():
+    """The code gets read aloud and typed on a phone. 0/O and 1/l/I are the
+    whole reason mistyped codes look like wrong codes."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "gen-pilot-secrets.py"
+    spec = importlib.util.spec_from_file_location("gen_pilot_secrets", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for char in "0O1lI":
+        assert char not in module.INVITE_ALPHABET, char
+    code = module.make_invite_code()
+    assert len(code) == module.INVITE_LENGTH >= module.MIN_INVITE
+    assert set(code) <= set(module.INVITE_ALPHABET)
+    assert len(module.make_token_secret()) >= module.MIN_SECRET
+
+
+def test_startup_names_the_code_by_fingerprint_not_value(build_app, caplog):
+    """A stale invite code is otherwise silent: editing .env does nothing until
+    a restart, and the process gives no sign of which code it still honours.
+    The startup line answers that -- but must not print the code."""
+    with caplog.at_level("INFO"):
+        build_app()
+    line = next(
+        (r.getMessage() for r in caplog.records if "invite code fingerprint" in r.getMessage()),
+        None,
+    )
+    assert line is not None, "启动日志应说明当前生效的邀请码"
+    assert INVITE_CODE not in line, "日志不得包含邀请码原文"
+    from fishagent.pilot.state import invite_fingerprint
+
+    assert invite_fingerprint(INVITE_CODE) in line
+
+
+def test_generator_fingerprint_matches_the_server():
+    """The whole point is comparing the two outputs; they must be the same
+    function, not two similar ones."""
+    import importlib.util
+    from pathlib import Path
+
+    from fishagent.pilot.state import invite_fingerprint as server_side
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "gen-pilot-secrets.py"
+    spec = importlib.util.spec_from_file_location("gen_pilot_secrets", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for code in ("abc", INVITE_CODE, "x" * 20):
+        assert module.invite_fingerprint(code) == server_side(code)
+
+
+def test_agent_tools_work_while_the_gate_is_on(build_app, monkeypatch):
+    """The tools call the API back through the same ASGI app, so the gate sees
+    those requests too. Before this was handled, every tool call arrived with
+    no cookie, got 401, and the agent answered "鱼情数据暂时不可用" to a
+    question the service could answer perfectly well -- while the endpoint
+    itself returned 200 to a browser.
+
+    The gap existed because the suite pins the gate off (conftest.py), so this
+    path was never exercised with it on. Ask a question that needs a tool and
+    assert the tool actually returned data.
+    """
+    # tools._request imports `fishagent.main.app` -- the module-level instance,
+    # which is built at import time with the gate off. Point it at the gated
+    # app this test just built, or the tool calls a different app that has no
+    # middleware and the test silently proves nothing.
+    app = build_app()
+    monkeypatch.setattr("fishagent.main.app", app)
+    with TestClient(app, base_url="https://testserver") as client:
+        login_client(client)
+        response = client.post(
+            "/api/agent/chat",
+            json={"message": "今天气压适合钓鱼吗？", "location": {"lat": 30.27, "lon": 120.15}},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        calls = {call["name"]: call["status"] for call in body["tool_calls"]}
+        assert calls.get("get_fish_activity") == "ok", body["tool_calls"]
+        assert body["fish_activity"] is not None
+        assert "不可用" not in body["reply"], body["reply"]
+
+
+def test_tools_still_require_a_token(build_app, monkeypatch):
+    """Forwarding the caller's token must not weaken the gate: a tool call made
+    without one is still refused. Otherwise "fix the internal call" would be
+    "add an auth bypass"."""
+    import asyncio
+
+    from fishagent.agent import tools
+
+    app = build_app()
+    monkeypatch.setattr("fishagent.main.app", app)
+    with pytest.raises(tools.ToolError):
+        asyncio.run(tools.get_fish_activity(30.27, 120.15))

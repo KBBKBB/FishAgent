@@ -26,6 +26,13 @@ dev = [
   "pytest-asyncio>=0.23",
   "ruff>=0.6",
 ]
+# CR-06 voice input. Optional on purpose: the default speech provider is
+# "none", and Vosk ships native wheels for some platforms only. Install this
+# extra on a host that actually runs recognition; the code raises
+# SpeechUnavailable with a clear message when the import is missing.
+speech = [
+  "vosk>=0.3.45",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

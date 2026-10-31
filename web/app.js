@@ -7,6 +7,21 @@
   var DEFAULT_LOCATION = MOCK_MODE ? MOCK_DEFAULT_LOCATION : REAL_DEFAULT_LOCATION;
   var DISCLOSURE = '本内容由 AI 生成，仅供参考，不承诺渔获。';
   var HISTORY_LIMIT = 10;
+  // The conversation survives a reload. A phone browser discards the page when
+  // it goes to the background on a memory-pressured device, which for this
+  // feature means losing the question you were typing an answer to.
+  // sessionStorage, not localStorage: the conversation belongs to one tab and
+  // one visit, and a shared phone should not hand yesterday's chat to whoever
+  // opens the browser next.
+  var CHAT_STORE_KEY = 'fishagent.chat.v1';
+  // Bumped when the stored shape changes; an older entry is dropped rather
+  // than half-read.
+  var CHAT_STORE_VERSION = 1;
+  // Messages kept after a reload. The request history is already capped at
+  // 10, so anything beyond that is display-only and this many is plenty.
+  var CHAT_RESTORE_LIMIT = 30;
+  var CHAT_GREETING =
+    '你好，我是 FishAgent 钓鱼助手。可以问我今天的鱼情、附近钓位，或明早的最佳出钓时段。所有建议由 AI 生成，仅供参考。';
   // Search ring. The default matches the innermost option (0–10 km) because
   // that is where the nearest water is, and it is what the page used to show.
   var DEFAULT_MIN_RADIUS_KM = 0;
@@ -55,6 +70,15 @@
     sessionId: makeSessionId(),
     history: [],
     chatBusy: false,
+    voiceBusy: false,
+    voiceRecording: false,
+    voiceCapture: null,
+    // Whether the server can actually recognise speech. Starts false and is
+    // only turned on by a /health answer: a mic button that throws 501 on
+    // every press is worse than no button, and the page cannot know before
+    // asking. Browsers can capture audio here long before the backend is
+    // configured to make sense of it.
+    voiceBackendReady: false,
     seq: 0,
     mockMode: MOCK_MODE,
     minRadiusKm: DEFAULT_MIN_RADIUS_KM,
@@ -547,6 +571,69 @@
     }
   }
 
+  function copyMessageForStorage(item) {
+    return {
+      role: item.role,
+      content: item.content,
+      mode: item.mode || null,
+      toolCalls: Array.isArray(item.toolCalls) ? item.toolCalls : null,
+      error: !!item.error
+    };
+  }
+
+  function saveChat() {
+    var payload = {
+      v: CHAT_STORE_VERSION,
+      sessionId: state.sessionId,
+      messages: state.history.slice(-CHAT_RESTORE_LIMIT).map(copyMessageForStorage)
+    };
+    // Text only. An attached photo is a blob URL that the message renderer
+    // deliberately revokes once the thumbnail loads, so a restored entry has
+    // no image to show and must not pretend to.
+    writeSessionValue(CHAT_STORE_KEY, JSON.stringify(payload));
+  }
+
+  function clearChatStorage() {
+    try {
+      window.sessionStorage.removeItem(CHAT_STORE_KEY);
+    } catch (error) {
+      /* nothing to do: the entry expires with the tab anyway */
+    }
+  }
+
+  function readStoredChat() {
+    var raw = readSessionValue(CHAT_STORE_KEY);
+    if (!raw) return null;
+    var payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+    if (!payload || payload.v !== CHAT_STORE_VERSION) return null;
+    var messages = Array.isArray(payload.messages) ? payload.messages : [];
+    var clean = [];
+    for (var i = 0; i < messages.length; i += 1) {
+      var item = messages[i];
+      // Validate rather than trust: storage is writable by anything else on
+      // this origin, and a malformed entry must not break rendering.
+      if (!item || (item.role !== 'user' && item.role !== 'assistant')) continue;
+      if (typeof item.content !== 'string' || !item.content) continue;
+      clean.push({
+        role: item.role,
+        content: item.content,
+        mode: typeof item.mode === 'string' ? item.mode : null,
+        toolCalls: Array.isArray(item.toolCalls) ? item.toolCalls : null,
+        error: !!item.error
+      });
+    }
+    if (!clean.length) return null;
+    return {
+      sessionId: typeof payload.sessionId === 'string' ? payload.sessionId : null,
+      messages: clean
+    };
+  }
+
   function syncPwaUi() {
     var installBtn = $('install-btn');
     if (installBtn) installBtn.hidden = isStandalone() || !deferredInstallPrompt;
@@ -936,6 +1023,10 @@
     try {
       var health = await requestJSON('/health');
       setModeBadge(health && health.mock_mode ? 'Mock 模式' : '在线数据');
+      // The mic button appears only once the server says it can transcribe.
+      // Silence when the field is absent (older server) reads as "no".
+      state.voiceBackendReady = !!(health && health.speech_enabled);
+      updateVoiceButton();
     } catch (error) {
       setModeBadge('服务未连接');
       setStatus(
@@ -1518,6 +1609,14 @@
     }
     li.append(speciesLine);
 
+    // Bait hangs off the same data as the species line, so it is filled in the
+    // same pass -- see fillBaitLine. Keeping them in separate DOM nodes means a
+    // species update can never leave stale bait underneath.
+    var baitLine = el('p', 'spot-bait');
+    baitLine.setAttribute('data-spot-key', key);
+    baitLine.hidden = true;
+    li.append(baitLine);
+
     if (data.entry_precision === 'center_fallback') {
       li.append(el('p', 'precision-warn', '该钓位缺少入口坐标，已回退至中心点，端点精度较低。'));
     }
@@ -1734,15 +1833,57 @@
         node.removeAttribute('data-empty');
         node.removeAttribute('data-degraded');
         node.textContent = '推荐鱼种：加载中…';
+        fillBaitLine(key, []);
         return;
       }
       node.removeAttribute('data-degraded');
       node.setAttribute('data-empty', 'true');
       node.textContent = '推荐鱼种：暂无相关鱼种推荐';
+      fillBaitLine(key, []);
     });
   }
 
+  // Bait under the species line. Rendered from the same response, so a card
+  // never shows bait for a fish whose species line failed to load.
+  //
+  // Walks the bait nodes rather than querying by key: spot keys contain "|"
+  // and Chinese, and matching those in an attribute selector needs escaping
+  // that is easy to get subtly wrong. Comparing the attribute directly is both
+  // simpler and exact.
+  function fillBaitLine(spotKeyValue, baits) {
+    var nodes = document.querySelectorAll('.spot-bait');
+    Array.prototype.forEach.call(nodes, function (node) {
+      if (node.getAttribute('data-spot-key') !== String(spotKeyValue)) return;
+      renderBaitNode(node, baits);
+    });
+  }
+
+  function renderBaitNode(node, baits) {
+    var list = Array.isArray(baits)
+      ? baits.filter(function (item) { return item && item.main; })
+      : [];
+    node.replaceChildren();
+    if (!list.length) {
+      node.hidden = true;
+      return;
+    }
+    node.hidden = false;
+    node.append(el('span', 'spot-bait-label', '推荐饵料：'));
+    list.forEach(function (item, index) {
+      // One species per line. Run together they become a wall of text --
+      // four plans in a single paragraph is unreadable on a phone.
+      if (index > 0) node.append(document.createElement('br'));
+      node.append(el('span', 'spot-bait-species', String(item.species || '') + '：'));
+      node.append(document.createTextNode(String(item.main)));
+      if (item.generic) node.append(el('span', 'spot-bait-generic', '（通用）'));
+    });
+    node.append(el('span', 'spot-bait-note', '仅供参考，请按现场水情调整'));
+  }
+
   function showSpeciesError(node, message) {
+    // The bait line is a child fact of the species line: if the species failed,
+    // whatever bait was there belongs to a result we are no longer showing.
+    fillBaitLine(node.getAttribute('data-spot-key'), []);
     node.replaceChildren();
     node.removeAttribute('data-degraded');
     node.removeAttribute('data-empty');
@@ -1759,6 +1900,7 @@
       : Array.isArray(result.species)
         ? result.species.filter(Boolean)
         : [];
+    fillBaitLine(node.getAttribute('data-spot-key'), degraded ? [] : result.baits);
     node.replaceChildren();
     node.removeAttribute('data-error');
     if (degraded) {
@@ -1832,10 +1974,190 @@
   }
 
   function updateChatControls() {
+    // 语音识别中不禁用输入框：识别期间用户仍可能想直接打字，禁掉只会让人干等。
     var busy = state.chatBusy || state.identifyBusy;
     $('chat-send').disabled = busy;
     $('chat-input').disabled = busy;
     updateIdentifyControls();
+    updateVoiceButton();
+  }
+
+  // --- 语音输入 -----------------------------------------------------------
+  //
+  // 采集在浏览器，识别在后端（见 docs/cr06-voice-input.md）。结果只写进输入框，
+  // 绝不自动发送：识别会错，本地模型对「鲢鳙」「黄颡鱼」这类词尤其容易错，自动
+  // 发送等于把一次听错变成一条用户从没问过的问题。
+
+  var VOICE_SAMPLE_RATE = 16000;
+  var VOICE_MAX_MS = 60000;
+
+  // 能不能用，取决于两件事，且顺序不能反：
+  //   1. 安全上下文（https / localhost）。明文局域网下 mediaDevices 根本不存在。
+  //   2. navigator.mediaDevices 本身。
+  // 不能用「webkitSpeechRecognition 是否存在」来判断——实测该构造器在非安全
+  // 上下文下同样存在，据它显示按钮会得到一个点了没反应的按钮。
+  function voiceSupported() {
+    if (window.isSecureContext === false) return false;
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  function updateVoiceButton() {
+    var button = $('voice-btn');
+    if (!button) return;
+    // Two independent conditions. The browser must be able to capture, and
+    // the server must be able to recognise. Both are required; either one
+    // failing means the button would not do what its label promises.
+    button.hidden = !(voiceSupported() && state.voiceBackendReady);
+    button.disabled = !!(state.chatBusy || state.voiceBusy);
+    button.setAttribute('aria-busy', state.voiceBusy ? 'true' : 'false');
+    button.classList.toggle('is-recording', state.voiceRecording);
+  }
+
+  function floatToPcm16(input) {
+    // 16-bit little-endian，即 Vosk 要的裸 PCM。
+    var out = new DataView(new ArrayBuffer(input.length * 2));
+    for (var i = 0; i < input.length; i += 1) {
+      var sample = Math.max(-1, Math.min(1, input[i]));
+      out.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    }
+    return out.buffer;
+  }
+
+  function stopVoiceCapture() {
+    var current = state.voiceCapture;
+    state.voiceCapture = null;
+    state.voiceRecording = false;
+    if (!current) return;
+    try {
+      if (current.processor) current.processor.disconnect();
+      if (current.source) current.source.disconnect();
+      if (current.context) current.context.close();
+    } catch (error) {
+      // 关闭阶段的异常不影响结果，忽略。
+    }
+    (current.stream.getTracks() || []).forEach(function (track) {
+      track.stop();
+    });
+    updateVoiceButton();
+  }
+
+  function startVoiceCapture() {
+    var button = $('voice-btn');
+    if (state.voiceBusy) return;
+    if (!voiceSupported()) {
+      // 说清楚原因，别让人去找一个改不好的权限开关。
+      setStatus(
+        window.isSecureContext === false
+          ? '当前不是 https 地址，浏览器不提供麦克风（不是权限问题）。请用 https 地址打开，或直接输入文字。'
+          : '当前浏览器不支持录音，请直接输入文字。',
+        'error'
+      );
+      return;
+    }
+    if (button) button.disabled = true;
+    navigator.mediaDevices
+      .getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+      .then(function (stream) {
+        var Context = window.AudioContext || window.webkitAudioContext;
+        if (!Context) throw new Error('浏览器不支持音频处理');
+        var context = new Context({ sampleRate: VOICE_SAMPLE_RATE });
+        var source = context.createMediaStreamSource(stream);
+        var processor = context.createScriptProcessor(4096, 1, 1);
+        var chunks = [];
+        var total = 0;
+        var capture = {
+          stream: stream,
+          context: context,
+          source: source,
+          processor: processor,
+          chunks: chunks
+        };
+        processor.onaudioprocess = function (event) {
+          if (!state.voiceCapture || state.voiceCapture !== capture) return;
+          var data = event.inputBuffer.getChannelData(0);
+          total += data.length;
+          if (total > (VOICE_MAX_MS / 1000) * VOICE_SAMPLE_RATE) {
+            // 到上限就主动收口，不做静默截断。
+            finishVoiceCapture();
+            return;
+          }
+          chunks.push(floatToPcm16(data));
+        };
+        source.connect(processor);
+        processor.connect(context.destination);
+        state.voiceCapture = capture;
+        state.voiceRecording = true;
+        updateVoiceButton();
+        setStatus('正在录音，点一下麦克风结束。', 'info', true);
+      })
+      .catch(function (error) {
+        if (button) button.disabled = false;
+        var name = error && error.name ? String(error.name) : '';
+        var message = '无法使用麦克风，请直接输入文字。';
+        if (name === 'NotAllowedError') {
+          message = '麦克风权限被拒绝，请在浏览器设置中允许本站使用麦克风，或直接输入文字。';
+        } else if (name === 'NotFoundError') {
+          message = '没有找到麦克风设备，请直接输入文字。';
+        }
+        setStatus(message, 'error');
+      });
+  }
+
+  function finishVoiceCapture() {
+    if (!state.voiceCapture) return;
+    var capture = state.voiceCapture;
+    var chunks = capture.chunks.slice();
+    stopVoiceCapture();
+    if (!chunks.length) {
+      setStatus('没有录到声音，请重试或直接输入文字。', 'error');
+      return;
+    }
+    var parts = [];
+    chunks.forEach(function (buffer) {
+      parts.push(new Uint8Array(buffer));
+    });
+    var blob = new Blob(parts, { type: 'application/octet-stream' });
+    sendVoiceForTranscription(blob);
+  }
+
+  function sendVoiceForTranscription(blob) {
+    state.voiceBusy = true;
+    updateChatControls();
+    setStatus('正在识别语音…', 'info', true);
+    var form = new FormData();
+    form.append('audio', blob, 'speech.pcm');
+    form.append('sample_rate', String(VOICE_SAMPLE_RATE));
+    requestJSON(
+      '/api/agent/transcribe',
+      { method: 'POST', body: form },
+      { timeoutMs: 30000 }
+    )
+      .then(function (data) {
+        state.voiceBusy = false;
+        var text = data && typeof data.text === 'string' ? data.text.trim() : '';
+        var input = $('chat-input');
+        if (text && input) {
+          // 只填入，不发送。
+          input.value = text;
+          input.focus();
+          setStatus('已填入识别结果，确认后再点发送。', 'info', true);
+        } else {
+          setStatus('没有听清，请靠近麦克风再说一次，或直接输入文字。', 'error');
+        }
+        updateChatControls();
+      })
+      .catch(function (error) {
+        state.voiceBusy = false;
+        updateChatControls();
+        var message = error && error.message ? String(error.message) : '语音识别失败，请直接输入文字。';
+        setStatus(message, 'error');
+      });
+  }
+
+  function toggleVoiceCapture() {
+    if (state.voiceBusy) return;
+    if (state.voiceRecording) finishVoiceCapture();
+    else startVoiceCapture();
   }
 
   function updateIdentifyControls() {
@@ -2159,6 +2481,14 @@
     var cameraButton = $('identify-camera-btn');
     var cameraInput = $('identify-camera-input');
 
+    // 麦克风按钮只在真正能用时出现；不能用的原因由 voiceSupported 决定，
+    // 不由构造器是否存在决定（见该函数注释）。
+    var voiceButton = $('voice-btn');
+    if (voiceButton) {
+      voiceButton.hidden = !voiceSupported();
+      voiceButton.addEventListener('click', toggleVoiceCapture);
+    }
+
     // 拍照入口只在触摸设备出现（(pointer: coarse) 或无精确指针的触屏设备）。
     if (cameraButton) cameraButton.hidden = !isTouchDevice();
 
@@ -2208,6 +2538,10 @@
       return { role: item.role, content: item.content };
     });
     state.history.push({ role: 'user', content: message });
+    // Persist before the request: if the page is reloaded or evicted while the
+    // answer is in flight, the question the user actually asked is still there.
+    saveChat();
+    setChatHistoryBarVisible(true);
 
     try {
       var data = await requestJSON('/api/agent/chat', {
@@ -2229,10 +2563,19 @@
         mode: data && data.mode,
         toolCalls: data && data.tool_calls
       });
-      state.history.push({ role: 'assistant', content: reply });
+      // The badges are part of what the user saw, so keep enough to redraw
+      // them: a restored "规则兜底" answer must not come back looking like a
+      // normal model answer.
+      state.history.push({
+        role: 'assistant',
+        content: reply,
+        mode: data && data.mode,
+        toolCalls: data && data.tool_calls
+      });
       if (state.history.length > HISTORY_LIMIT * 2) {
         state.history = state.history.slice(-HISTORY_LIMIT * 2);
       }
+      saveChat();
       if (data && data.fish_activity && typeof data.fish_activity === 'object') {
         renderActivity(data.fish_activity);
       }
@@ -2247,6 +2590,11 @@
           ? error.message
           : '抱歉，服务暂时不可用。请确认后端已启动后再试。';
       appendChatMessage('assistant', chatNotice, { error: true });
+      // A failed request leaves no user message in history (it is popped
+      // above), but the notice was shown, so persist it: reloading should not
+      // erase the fact that the last attempt failed.
+      state.history.push({ role: 'assistant', content: chatNotice, error: true });
+      saveChat();
       setStatus('对话请求失败：' + ((error && error.message) || '未知错误'), 'error');
     } finally {
       state.chatBusy = false;
@@ -2335,6 +2683,9 @@
         state.lat = lat;
         state.lon = lon;
         state.name = '我的位置';
+        // 输入框若还留着上一个地名，用户会以为仍然按那个地点在分析——
+        // 位置已经换成定位点了，输入框必须跟着清空，否则界面自相矛盾。
+        clearPlaceInput();
         syncLocationUI();
         setGeoStatus(accuracy ? '定位成功，精度约 ' + accuracy + ' 米（WGS84）。' : '定位成功（WGS84）。');
         setStatus('已使用你的定位，正在分析鱼情与钓位。', 'info', true);
@@ -2413,6 +2764,17 @@
     if (results) results.hidden = true;
     var nearby = $('nearby-list');
     if (nearby) nearby.hidden = true;
+  }
+
+  // The place box is an input, not a record of the current location -- that is
+  // what the Step 1 summary shows. Once the location changes by any other route
+  // (geolocation, nearby list, coordinates), leaving the old keyword in the box
+  // suggests the analysis is still about it.
+  function clearPlaceInput() {
+    var input = $('place-input');
+    if (input) input.value = '';
+    var label = $('place-results-label');
+    if (label) label.textContent = '搜索结果';
   }
 
   function setPlaceBusy(busy) {
@@ -2537,6 +2899,8 @@
         sendMessage(button.getAttribute('data-question'));
       });
     });
+    var clearBtn = $('chat-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', clearChat);
     bindIdentifyEvents();
   }
 
@@ -2959,10 +3323,55 @@
     };
   }
 
+  function setChatHistoryBarVisible(visible) {
+    var bar = $('chat-history-bar');
+    if (!bar) return;
+    bar.hidden = !visible;
+  }
+
+  function clearChat() {
+    state.history = [];
+    state.sessionId = makeSessionId();
+    clearChatStorage();
+    setChatHistoryBarVisible(false);
+    var list = $('chat-messages');
+    if (list) list.textContent = '';
+    // The greeting is part of the empty state, not of the conversation: draw
+    // it without adding it to history, or it would be restored as a message
+    // the assistant never actually said, and sent to the server as context.
+    if (list) appendChatMessage('assistant', CHAT_GREETING);
+    setStatus('对话已清空。', 'info');
+  }
+
+  function restoreChat() {
+    var stored = readStoredChat();
+    if (!stored) return;
+    // Reuse the same session id so the server sees a continuing conversation
+    // rather than a brand new one after a reload.
+    if (stored.sessionId) state.sessionId = stored.sessionId;
+    state.history = [];
+    setChatHistoryBarVisible(true);
+    stored.messages.forEach(function (item) {
+      appendChatMessage(item.role, item.content, {
+        mode: item.mode,
+        toolCalls: item.toolCalls,
+        error: item.error
+      });
+      state.history.push({
+        role: item.role,
+        content: item.content,
+        mode: item.mode,
+        toolCalls: item.toolCalls,
+        error: item.error
+      });
+    });
+  }
+
   function init() {
     syncLocationUI();
     $('radius-select').value = state.minRadiusKm + '-' + state.radiusKm;
     bindEvents();
+    restoreChat();
     initPwa();
     if (state.mockMode) {
       setModeBadge('Mock 演示');

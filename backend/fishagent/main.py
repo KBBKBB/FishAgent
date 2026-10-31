@@ -18,6 +18,7 @@ from fishagent.api.identify import router as identify_router
 from fishagent.api.meta import router as meta_router
 from fishagent.api.species import router as species_router
 from fishagent.api.spots import router as spots_router
+from fishagent.api.transcribe import router as transcribe_router
 from fishagent.config import get_settings
 from fishagent.core.image_guard import sync_pillow_limits
 from fishagent.errors import ApiError, register_exception_handlers
@@ -25,7 +26,11 @@ from fishagent.pilot import get_pilot_state
 from fishagent.pilot.middleware import PilotAccessMiddleware, quota_exceeded_handler
 from fishagent.pilot.router import router as pilot_router
 from fishagent.providers.base import UpstreamQuotaExceeded
-from fishagent.static_build import BuildIdHolder, ShellStaticFiles
+from fishagent.static_build import (
+    BuildIdHolder,
+    ShellStaticFiles,
+    compute_backend_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +54,8 @@ def _configure_logging() -> None:
     root.setLevel(level)
 
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+# The package itself, for the backend half of the build id.
+PACKAGE_DIR = Path(__file__).resolve().parent
 
 # The unknown-API catch-all must claim every verb. Registered for GET only, any
 # unmatched POST falls through to the StaticFiles mount, which answers a bare
@@ -137,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(species_router)
     app.include_router(_agent_router())
     app.include_router(identify_router)
+    app.include_router(transcribe_router)
     if pilot_state is not None:
         app.include_router(pilot_router)
 
@@ -163,7 +171,12 @@ def create_app() -> FastAPI:
         # computed from the file contents so nobody has to remember to bump it,
         # and it is attached here so /health and the HTML injection can never
         # disagree about it.
-        app.state.build_id = BuildIdHolder(WEB_DIR)
+        # Both halves of what a client is actually running: the shell files it
+        # loaded, and the server code answering it. The backend half is frozen
+        # here because it cannot change without a restart.
+        app.state.build_id = BuildIdHolder(
+            WEB_DIR, backend_fingerprint=compute_backend_fingerprint(PACKAGE_DIR)
+        )
         app.mount(
             "/",
             ShellStaticFiles(

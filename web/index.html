@@ -165,6 +165,19 @@
           </div>
           <span class="chat-status" id="chat-status"><span class="badge-dot" aria-hidden="true"></span><span id="chat-status-text">在线</span></span>
         </div>
+        <!-- The conversation is kept in sessionStorage so a reload does not
+             erase it. That makes an obvious exit necessary: on a shared phone
+             the next person to open this tab should be able to start clean
+             without hunting through browser settings. Hidden until there is
+             something to clear. -->
+        <div class="chat-history-bar" id="chat-history-bar" hidden>
+          <!-- Phrased for both cases. "已恢复上次对话" would be a lie during a
+               live session, and the point of saying anything at all is that
+               the conversation now outlives a reload -- which the user has no
+               other way to know. -->
+          <span class="chat-history-text">对话会保留到关闭标签页</span>
+          <button type="button" class="link-btn" id="chat-clear-btn">清空对话</button>
+        </div>
         <div class="quick-questions" role="group" aria-label="示例问题">
           <button type="button" class="chip-btn" data-question="今天气压适合钓鱼吗？">今天气压适合钓鱼吗？</button>
           <button type="button" class="chip-btn" data-question="附近哪里野钓好？">附近哪里野钓好？</button>
@@ -192,6 +205,16 @@
               </svg>
             </button>
             <input class="sr-only" id="identify-camera-input" type="file" accept="image/*" capture="environment" tabindex="-1" aria-hidden="true">
+            <!-- Voice input. It only fills the text box; sending stays a
+                 separate, deliberate act, because recognition is wrong often
+                 enough that auto-sending would ask a question the user never
+                 asked. Hidden unless the page is in a secure context. -->
+            <button type="button" class="chat-tool-btn chat-tool-mic" id="voice-btn" aria-label="语音输入（识别结果填入输入框，不会自动发送）" title="语音输入" hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                <path d="M12 4.5a2.6 2.6 0 0 1 2.6 2.6v4.8a2.6 2.6 0 1 1-5.2 0V7.1A2.6 2.6 0 0 1 12 4.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                <path d="M6.8 11.4a5.2 5.2 0 0 0 10.4 0M12 16.6V20m-2.6 0h5.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>
+              </svg>
+            </button>
           </div>
           <label class="sr-only" for="chat-input">输入你的问题</label>
           <input id="chat-input" name="message" type="text" maxlength="500" autocomplete="off" placeholder="例如：今天气压适合钓鱼吗？" required>

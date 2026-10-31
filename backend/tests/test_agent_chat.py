@@ -148,3 +148,111 @@ def test_ai_disclosure_and_no_promises(client):
         assert "不承诺渔获" in disclosure
         for phrase in PROMISE_PATTERNS:
             assert phrase not in payload["reply"], (phrase, payload["reply"])
+
+
+# --- bait questions ---------------------------------------------------------
+#
+# These were reported as broken: "鲫鱼用什么饵料" was answered while
+# "白条用什么饵料" returned the generic "I can help with..." guide. The cause was
+# that the agent kept its own four-name species list (饵料 questions never
+# matched an intent at all, and only 鲫/鲤 had aliases, so 鲫鱼 matched by
+# accident). Both halves are covered here: the intent and the species.
+
+
+@pytest.mark.parametrize(
+    "message,species",
+    [
+        ("鲫鱼用什么饵料", "鲫鱼"),
+        ("白条用什么饵料", "白条"),
+        ("翘嘴用什么饵料", "翘嘴"),
+        ("罗非鱼用什么饵料", "罗非鱼"),
+        ("马口怎么钓", "马口"),
+        ("胖头鱼用什么饵", "鲢鳙"),
+    ],
+)
+def test_bait_question_answers_for_every_known_species(client, message, species):
+    payload = chat_ok(client, message)
+    assert payload["mode"] in {"llm", "fallback"}
+    reply = payload["reply"]
+    # The guide reply is the failure mode this test exists for.
+    assert "我可以帮你分析" not in reply, reply
+    assert species in reply, reply
+
+
+def test_bait_question_does_not_depend_on_the_llm(client):
+    """Bait comes from a table, so mock mode must still answer.
+
+    Losing the LLM should degrade the wording, not turn an answer into a guide.
+    """
+    payload = chat_ok(client, "白条用什么饵料")
+    assert payload["mode"] == "fallback"
+    assert "白条" in payload["reply"]
+    assert "饵料" in payload["reply"] or "腥香" in payload["reply"]
+
+
+def test_bait_question_without_species_still_answers(client):
+    payload = chat_ok(client, "用什么饵料好")
+    reply = payload["reply"]
+    assert "我可以帮你分析" not in reply, reply
+    assert "通用" in reply, reply
+
+
+def test_bait_reply_stays_within_the_sentence_budget(client):
+    for message in ("鲫鱼用什么饵料", "白条用什么饵料", "钓鲢鳙用什么饵", "用什么饵料好"):
+        payload = chat_ok(client, message)
+        sentences = [part for part in re.split(r"[。！？!?]", payload["reply"]) if part.strip()]
+        assert 1 <= len(sentences) <= 5, (message, len(sentences), payload["reply"])
+
+
+def test_bait_and_conditions_share_one_reply(client):
+    """Asking both must not drop either half.
+
+    The response carries no intents field, so the evidence is in what got
+    called and what came back: the activity tool ran AND the reply names the
+    fish.
+    """
+    payload = chat_ok(client, "今天气压怎么样，白条用什么饵料")
+    reply = payload["reply"]
+    assert "白条" in reply, reply
+    assert "get_fish_activity" in tool_names(payload), payload["tool_calls"]
+    assert payload["fish_activity"] is not None
+
+    sentences = [part for part in re.split(r"[。！？!?]", reply) if part.strip()]
+    assert len(sentences) <= 5, (len(sentences), reply)
+
+
+def test_unsupported_activity_species_does_not_break_the_answer(client):
+    """白条 has no activity model; asking about conditions must still work.
+
+    Passing it straight through to /api/fish-activity is a 422, which would
+    turn a normal question into a failed tool call.
+    """
+    payload = chat_ok(client, "白条今天适合钓吗")
+    calls = payload["tool_calls"]
+    assert calls, payload
+    activity_call = next(
+        call for call in calls if call["name"] == "get_fish_activity"
+    )
+    assert activity_call["status"] == "ok", calls
+    assert "species" not in activity_call["args"], activity_call
+
+
+def test_bait_composes_with_spots_instead_of_replacing_them(client):
+    """Asking for a spot AND bait must return both.
+
+    Bait is answered from a local table, so it is tempting to return early --
+    that silently drops the spot recommendation, which is the half the user
+    cannot get anywhere else.
+    """
+    payload = chat_ok(client, "附近哪里钓鲫鱼，用什么饵料")
+    reply = payload["reply"]
+    # Bait half
+    assert "鲫鱼" in reply, reply
+    # Spot half: either a spot name or the explicit "none found" wording.
+    spots = payload["spots"] or {}
+    names = [item["name"] for item in spots.get("spots") or []]
+    assert (names and any(name in reply for name in names)) or "钓位" in reply, reply
+    assert "recommend_spots" in tool_names(payload), payload["tool_calls"]
+
+    sentences = [part for part in re.split(r"[。！？!?]", reply) if part.strip()]
+    assert len(sentences) <= 5, (len(sentences), reply)

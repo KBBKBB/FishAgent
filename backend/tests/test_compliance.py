@@ -17,7 +17,15 @@ SECRET_PATTERNS = (
     "AMAP_WEB_KEY",
     "LLM_API_KEY",
     "OPEN_METEO_KEY",
-    "sk-",
+)
+
+# Keys are matched by shape, not by the bare prefix. "sk-" on its own is a
+# three-character substring that shows up in ordinary CSS -- `mask-image`
+# tripped it while fixing the chat layout -- and a detector that cries wolf
+# gets weakened or deleted. The shape below is what an actual key looks like:
+# the prefix followed by a long run of key characters.
+SECRET_SHAPES = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
 )
 
 DIRECT_ENDPOINTS = (
@@ -39,6 +47,10 @@ def test_web_sources_contain_no_key_or_direct_provider_calls():
         for pattern in SECRET_PATTERNS:
             if pattern in text:
                 findings.append(f"{name} 含敏感串 {pattern!r}")
+        for shape in SECRET_SHAPES:
+            match = shape.search(text)
+            if match:
+                findings.append(f"{name} 含疑似密钥 {match.group()[:8]!r}...")
         for endpoint in DIRECT_ENDPOINTS:
             if endpoint in text:
                 findings.append(f"{name} 直连第三方 {endpoint}")
@@ -220,3 +232,123 @@ def test_update_watch_ignores_uninjected_pages():
     index_html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     assert 'name="fishagent-build"' in index_html
 
+
+
+# --- 语音输入（CR-06）------------------------------------------------------
+#
+# 两条约束来自功能本身的性质：
+#   1. 识别结果只填进输入框。识别会错，自动发送等于把一次听错变成一条用户
+#      从没问过的问题——和"更新提示不自动刷新"是同一条原则。
+#   2. 能力判断不能靠 webkitSpeechRecognition 是否存在。实测该构造器在非安全
+#      上下文下同样存在，而 navigator.mediaDevices 才真正消失；据构造器显示
+#      按钮，用户会得到一个点了没反应的按钮。
+
+
+def test_voice_result_is_inserted_not_sent():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function sendVoiceForTranscription")
+    end = app_js.index("function toggleVoiceCapture", start)
+    body = app_js[start:end]
+    assert "sendMessage(" not in body, "语音识别结果不得自动发送"
+    assert "input.value = text" in body, "识别结果应填入输入框"
+
+
+def test_voice_capability_check_does_not_trust_the_constructor():
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function voiceSupported")
+    end = app_js.index("function updateVoiceButton", start)
+    body = app_js[start:end]
+    assert "isSecureContext" in body, "必须先判安全上下文"
+    assert "mediaDevices" in body, "必须以 mediaDevices 为准"
+    assert "webkitSpeechRecognition" not in body, (
+        "该构造器在非安全上下文下同样存在，不能用作能力判断"
+    )
+
+
+def test_voice_insecure_message_is_not_a_permission_message():
+    """同 2026-10-29 定位那次的错误：把协议问题说成权限被拒。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function startVoiceCapture")
+    end = app_js.index("function finishVoiceCapture", start)
+    body = app_js[start:end]
+    assert "不是权限问题" in body
+
+
+def test_voice_button_needs_the_backend_too():
+    """采集能力不等于识别能力。后端没开识别时，按钮点了只会拿到 501；宁可
+    不显示，也不给一个必然失败的控件。"""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function updateVoiceButton")
+    end = app_js.index("function floatToPcm16", start)
+    body = app_js[start:end]
+    assert "voiceSupported()" in body
+    assert "voiceBackendReady" in body, "后端未就绪时不得显示麦克风按钮"
+
+    start = app_js.index("async function checkHealth")
+    end = app_js.index("}\n\n", app_js.index("updateVoiceButton();", start))
+    assert "speech_enabled" in app_js[start:end], "/health 应告知能否识别"
+
+
+def test_secret_detector_ignores_css_but_still_catches_a_key():
+    """The detector used to flag the three characters "sk-" anywhere, so
+    `mask-image` in styles.css read as a leaked OpenAI key. A check that
+    fails on ordinary CSS gets weakened or deleted; this one matches the shape
+    of a key instead, and these two cases keep it honest in both directions."""
+    from test_compliance import SECRET_SHAPES
+
+    css = "mask-image: linear-gradient(90deg, #000, transparent);"
+    assert not any(pattern.search(css) for pattern in SECRET_SHAPES)
+
+    leaked = 'const key = "sk-proj-AbCdEf0123456789xyzXY";'
+    assert any(pattern.search(leaked) for pattern in SECRET_SHAPES)
+
+
+def test_chat_history_uses_session_storage_not_persistent():
+    """The conversation survives a reload, which is the point -- but it must not
+    outlive the tab. localStorage would hand yesterday's chat to whoever opens
+    the browser next on a shared phone."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function saveChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "sessionStorage" in body
+    # The word itself appears in comments explaining the choice, so look for a
+    # call rather than the identifier. Without an exclusion this would fire on
+    # the very comment that documents the rule.
+    assert "localStorage.setItem" not in app_js, "对话不得写入 localStorage"
+    assert "localStorage.getItem" not in app_js
+
+
+def test_chat_history_never_stores_photos_or_object_urls():
+    """An attached photo is a blob: URL that the renderer revokes once the
+    thumbnail loads. Storing it would restore a dead reference and imply the
+    image is still there."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function copyMessageForStorage")
+    end = app_js.index("function saveChat", start)
+    body = app_js[start:end]
+    for banned in ("blob", "objectUrl", "createObjectURL", "image", "file"):
+        assert banned not in body, banned
+
+
+def test_restored_history_is_validated_before_rendering():
+    """sessionStorage on this origin is writable by anything else running here.
+    A malformed entry must be dropped, not rendered."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function readStoredChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "CHAT_STORE_VERSION" in body, "版本不符的旧数据应丢弃"
+    assert "item.role !== 'user'" in body, "角色必须校验"
+    assert "typeof item.content !== 'string'" in body, "内容必须校验"
+
+
+def test_clearing_the_chat_removes_the_stored_copy():
+    """Clearing has to actually delete, not just empty the panel: the stored
+    copy would otherwise come back on the next reload."""
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("function clearChat")
+    end = app_js.index("function restoreChat", start)
+    body = app_js[start:end]
+    assert "clearChatStorage" in body
+    assert "state.history = []" in body

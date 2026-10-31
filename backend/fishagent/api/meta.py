@@ -11,6 +11,26 @@ from fishagent.schemas import DemoConfigResponse, HealthResponse
 router = APIRouter(tags=["meta"])
 
 
+def _speech_ready(settings) -> bool:
+    """Whether the page should offer a mic button.
+
+    Deliberately stricter than "a provider is configured": a vosk provider
+    with no model on disk would accept the press and then fail every time, so
+    the button would exist only to produce an error. Checking the model
+    directory costs a couple of stat calls and runs once per health poll.
+    """
+    provider = (settings.speech_provider or "").strip().lower()
+    if provider in ("", "none"):
+        return False
+    if provider == "vosk":
+        from fishagent.providers.speech_vosk import model_available
+
+        return model_available(settings.speech_model_path)
+    # An unknown provider name is a configuration mistake. Report it as
+    # unavailable rather than promising a feature that will 501.
+    return False
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health(request: Request, response: Response) -> HealthResponse:
     settings = get_settings()
@@ -24,6 +44,7 @@ async def health(request: Request, response: Response) -> HealthResponse:
         version=__version__,
         build=holder.get() if holder is not None else "",
         mock_mode=settings.mock_mode,
+        speech_enabled=_speech_ready(settings),
     )
 
 

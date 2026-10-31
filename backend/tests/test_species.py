@@ -34,6 +34,9 @@ RESULT_KEYS = {
     "source",
     "source_label",
     "note",
+    # Derived from `species` in the same response, so a card cannot show bait
+    # for a fish its own species line does not list.
+    "baits",
 }
 
 MOCK_SPOTS = [
@@ -1270,3 +1273,85 @@ def test_a_hung_page_cannot_make_the_whole_batch_time_out():
 
     assert [species for species, _, _ in deepened] == [["鲫鱼"]] * 4
     assert elapsed < 2.0, f"a hung page held the batch for {elapsed:.2f}s"
+
+
+# --- bait suggestions -------------------------------------------------------
+#
+# Each spot card shows "推荐鱼种" and then "推荐饵料" underneath. The bait has to
+# come from the species on that same card: computing it independently would let
+# a card recommend bait for a fish it just said was not there.
+
+
+def test_baits_follow_the_species_list(client):
+    payload = client.post("/api/spots/species", json={"spots": MOCK_SPOTS}).json()
+    for item in payload["results"]:
+        if not item["species"]:
+            assert item["baits"] == [], item
+            continue
+        assert [bait["species"] for bait in item["baits"]] == item["species"], item
+
+
+def test_each_bait_entry_is_complete(client):
+    payload = client.post("/api/spots/species", json={"spots": MOCK_SPOTS}).json()
+    entries = [bait for item in payload["results"] for bait in item["baits"]]
+    assert entries, "mock data should produce at least one bait plan"
+    for bait in entries:
+        assert set(bait) == {"species", "main", "nest", "tip", "generic"}
+        assert bait["main"].strip(), bait
+        assert bait["tip"].strip(), bait
+        assert isinstance(bait["generic"], bool)
+
+
+def test_degraded_response_has_no_bait(client, override_provider):
+    """A failed lookup must not leave bait on the card.
+
+    Bait for a species we cannot confirm is present would read as a
+    recommendation for this water body -- exactly the implication degradation
+    is supposed to avoid.
+    """
+
+    class FailingProvider:
+        name = "test"
+        source_label = ""
+
+        async def find_species(self, spots):
+            raise RuntimeError("community lookup unavailable")
+
+    override_provider(FailingProvider())
+    payload = client.post("/api/spots/species", json={"spots": MOCK_SPOTS}).json()
+    assert payload["degraded"] is True
+    for item in payload["results"]:
+        assert item["species"] == []
+        assert item["baits"] == [], item
+
+
+def test_empty_recommendation_has_no_bait(client, override_provider):
+    override_provider(NullSpeciesProvider())
+    payload = client.post("/api/spots/species", json={"spots": MOCK_SPOTS}).json()
+    for item in payload["results"]:
+        assert item["baits"] == [], item
+
+
+def test_typical_fallback_still_gets_bait(client, override_provider):
+    """When the card shows 'same-type common species', those species get bait
+    too -- the whole point is that the bait matches what is displayed."""
+
+    class EmptyButResolvesProvider:
+        name = "test"
+        source_label = ""
+        # Found nothing, but it *did* look -- so the water-type fallback applies.
+        resolves_empty = True
+
+        async def find_species(self, spots):
+            return [[] for _ in spots]
+
+    override_provider(EmptyButResolvesProvider())
+    response = client.post(
+        "/api/spots/species",
+        json={"spots": [{"name": "某个没查到的小水库", "water_type": "水库"}]},
+    )
+    assert response.status_code == 200, response.text
+    item = response.json()["results"][0]
+    assert item["source"] == "typical", item
+    assert item["species"]
+    assert [bait["species"] for bait in item["baits"]] == item["species"]

@@ -440,6 +440,16 @@ body.has-update-banner {
   min-width: 0;
 }
 
+/* The composer's layout is decided by how much room the card has, not by how
+   wide the window is. The desktop sidebar is 390 px -- almost exactly a 360 px
+   phone's card -- so a viewport rule fixed the phone and left the sidebar with
+   the same 180 px input it was supposed to fix. Container queries make one
+   rule serve both. */
+.chat-card {
+  container-type: inline-size;
+  container-name: chatcard;
+}
+
 .card {
   min-width: 0;
   padding: 20px;
@@ -1467,6 +1477,45 @@ h3 {
   color: var(--ink-soft);
 }
 
+/* Bait plan, directly under the species it belongs to. Slightly indented so
+   the two read as one block rather than two unrelated facts. */
+.spot-bait {
+  margin: 4px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--brand-soft);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.spot-bait[hidden] {
+  display: none;
+}
+
+.spot-bait-label {
+  display: block;
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+
+.spot-bait-species {
+  color: var(--brand-ink);
+  font-weight: 700;
+}
+
+.spot-bait-generic {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.spot-bait-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
 /* 由水域类型推导的参考值：不是该水域的实测/网友报告，弱化呈现，
    与"查到了具体来源"的结果区分开。 */
 .spot-species[data-typical="true"] {
@@ -1525,6 +1574,30 @@ h3 {
 
 .chat-head {
   margin-bottom: 10px;
+}
+
+/* Explains why old messages are on screen after a reload, and offers the way
+   out. Without the label, a restored conversation just looks like the page
+   remembered something it was never asked to remember. */
+.chat-history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+
+.chat-history-bar[hidden] {
+  display: none;
+}
+
+.chat-history-text {
+  color: var(--ink-soft);
+  font-size: 11.5px;
 }
 
 .chat-status {
@@ -1742,6 +1815,29 @@ h3 {
 
 .chat-tool-camera[hidden] {
   display: none !important;
+}
+
+.chat-tool-mic[hidden] {
+  display: none !important;
+}
+
+/* 录音中是"正在进行"而不是"请等待"，所以用红色脉冲表示状态，
+   和上传/识别的绿色脉冲区分开。 */
+.chat-tool-btn.is-recording {
+  background: #fdecec;
+  border-color: #e9a9a9;
+  color: #b42318;
+  animation: mic-pulse 1.2s infinite ease-in-out;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(180, 35, 24, 0.28);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(180, 35, 24, 0.06);
+  }
 }
 
 @keyframes tool-pulse {
@@ -2185,22 +2281,10 @@ h3 {
     min-width: 78px;
   }
 
-  .chat-form {
-    gap: 6px;
-  }
-
-  .chat-tools {
-    gap: 4px;
-  }
-
-  .chat-tool-btn {
-    width: 34px;
-    height: 34px;
-  }
-
+  /* The composer switches to a stacked layout based on the card's own width,
+     not the viewport -- see the .chat-card container rule. */
   .chat-form .btn {
-    padding-inline: 12px;
-    font-size: 13.5px;
+    min-width: 76px;
   }
 
   .msg-thumb {
@@ -2210,6 +2294,89 @@ h3 {
 
   .identify-species {
     font-size: 14.5px;
+  }
+}
+
+/* --- 窄聊天卡片：输入区改堆叠 -----------------------------------------
+   实测 360 px 的手机和 390 px 的桌面侧栏，输入框都只拿到约一半宽度，
+   placeholder 被截断。根因是同一条 302 px 的行里塞了两个圆形按钮、
+   输入框和发送按钮。这里按"卡片自身宽度"判断而不是视口宽度——桌面侧栏
+   只有 390 px，视口宽度 1280 px 的媒体查询永远管不到它。 */
+
+@container chatcard (max-width: 400px) {
+  .chat-form {
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .chat-form input {
+    /* Take a whole row. The other arrangement -- icons above, field below --
+       was measured too: it leaves a wide empty gap beside the icons while the
+       field stays narrow. */
+    order: 1;
+    flex: 1 1 100%;
+    /* 16px is the threshold below which iOS Safari zooms the page when a
+       field takes focus; the desktop 14px makes the page jump on every tap. */
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .chat-tools {
+    order: 2;
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  /* No longer sharing a row, so these can be a comfortable touch target. */
+  .chat-tool-btn {
+    width: 42px;
+    height: 42px;
+  }
+
+  .chat-form .btn {
+    order: 3;
+    /* Send goes to the right edge, under the thumb that is already there. */
+    margin-left: auto;
+    min-height: 42px;
+    padding-inline: 16px;
+    font-size: 14px;
+  }
+
+  /* Three chips wrapped to two rows, the last one stranded alone, 66 px of a
+     600 px card spent on suggestions. Sideways scrolling costs no height and
+     keeps all three within thumb reach. */
+  .quick-questions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* No scrollbar on touch, so a half-visible chip is the only hint that the
+       row continues. The fade makes that look deliberate. */
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+    /* Trailing room so the last chip scrolls clear of the fade. */
+    padding-right: 28px;
+    padding-bottom: 2px;
+    margin-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .quick-questions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chip-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* The disclaimer stays -- it carries the "AI generated" and "obey local
+     rules" claims -- but two lines at 11 px is a wall of grey under the
+     composer. */
+  .chat-note {
+    font-size: 10.5px;
+    line-height: 1.45;
+    margin-top: 6px;
   }
 }
 

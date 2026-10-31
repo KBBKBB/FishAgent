@@ -23,6 +23,19 @@ os.environ["AMAP_WEB_KEY"] = ""
 os.environ["LLM_API_KEY"] = ""
 os.environ["FISHAGENT_SPECIES_PROVIDER"] = ""
 os.environ["FISHAGENT_SPECIES_PAGE_FETCH"] = "false"
+# The pilot access gate is deployment configuration, not product behaviour.
+# Leaving it unset here means the suite exercises the open S1 surface; a
+# developer who turns on the gate in backend/.env would otherwise have every
+# API test fail with 401 for a reason unrelated to the code under test.
+# The gate's own behaviour is covered by the pilot tests, which set these
+# explicitly.
+os.environ["FISHAGENT_PUBLIC_ACCESS_ENABLED"] = "false"
+
+# Same reasoning for the speech provider: whether this host happens to have a
+# Vosk model installed is a deployment fact, not product behaviour. Pinning it
+# off keeps /health deterministic; the voice tests configure it per case.
+os.environ["FISHAGENT_SPEECH_PROVIDER"] = "none"
+os.environ["FISHAGENT_SPEECH_MODEL_PATH"] = ""
 
 HANGZHOU = {"lat": 30.2741, "lon": 120.1551}
 BEIJING = {"lat": 39.915, "lon": 116.404}

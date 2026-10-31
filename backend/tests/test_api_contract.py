@@ -102,3 +102,40 @@ def test_generated_at_is_utc(client):
     payload = response.json()
     assert_iso_utc(payload["generated_at"])
     assert payload["timezone"] == "Asia/Shanghai"
+
+
+def test_health_hides_the_mic_when_speech_is_off(client):
+    """The page offers the mic button only when /health says speech works.
+    Reporting a configured-but-broken provider would produce a control that
+    can only answer 501."""
+    assert client.get("/health").json()["speech_enabled"] is False
+
+
+def test_speech_is_reported_enabled_only_with_a_usable_model(client, monkeypatch):
+    from fishagent.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "speech_provider", "vosk")
+    # No model path: the engine would accept every press and then fail.
+    monkeypatch.setattr(settings, "speech_model_path", "")
+    assert client.get("/health").json()["speech_enabled"] is False
+
+    # A path that does not exist is equally unusable.
+    monkeypatch.setattr(settings, "speech_model_path", "D:/definitely/not/a/model")
+    assert client.get("/health").json()["speech_enabled"] is False
+
+    # An unknown provider name is a config mistake, not a feature.
+    monkeypatch.setattr(settings, "speech_provider", "voicemail")
+    monkeypatch.setattr(settings, "speech_model_path", "")
+    assert client.get("/health").json()["speech_enabled"] is False
+
+
+def test_speech_is_reported_enabled_with_a_model_directory(client, monkeypatch, tmp_path):
+    """The positive direction, so the check cannot pass by always saying no."""
+    from fishagent.config import get_settings
+
+    (tmp_path / "README").write_text("stand-in for a model", encoding="utf-8")
+    settings = get_settings()
+    monkeypatch.setattr(settings, "speech_provider", "vosk")
+    monkeypatch.setattr(settings, "speech_model_path", str(tmp_path))
+    assert client.get("/health").json()["speech_enabled"] is True
